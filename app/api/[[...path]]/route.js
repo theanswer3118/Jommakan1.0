@@ -619,6 +619,470 @@ async function handler(req, { params }) {
       return json({ reconciliation: data });
     }
 
+    // ============ PHASE 2: PURCHASING ============
+
+    // -------- SUPPLIERS --------
+    if (method === 'GET' && path === 'suppliers') {
+      const { user, supabase } = await getAuthContext(req);
+      if (!user) return json({ error: 'Unauthorized' }, 401);
+      const { data, error } = await supabase.from('suppliers').select('*').order('name');
+      if (error) return json({ error: error.message }, 403);
+      return json({ suppliers: data });
+    }
+    if (method === 'POST' && path === 'suppliers') {
+      const { user, token } = await getAuthContext(req);
+      if (!user) return json({ error: 'Unauthorized' }, 401);
+      const body = await req.json();
+      const userClient = getUserSupabase(token);
+      const { data: me } = await userClient.from('employees').select('outlet_id').eq('auth_user_id', user.id).maybeSingle();
+      const { data, error } = await userClient.from('suppliers').insert({
+        outlet_id: body.outlet_id || me?.outlet_id,
+        name: body.name, contact_name: body.contact_name || null,
+        whatsapp: body.whatsapp || null, phone: body.phone || null,
+        email: body.email || null, address: body.address || null,
+        notes: body.notes || null, is_active: body.is_active !== false,
+      }).select().single();
+      if (error) return json({ error: error.message }, 403);
+      return json({ supplier: data });
+    }
+    if (path.startsWith('suppliers/') && (method === 'PATCH' || method === 'DELETE')) {
+      const { user, token } = await getAuthContext(req);
+      if (!user) return json({ error: 'Unauthorized' }, 401);
+      const id = path.split('/')[1];
+      const userClient = getUserSupabase(token);
+      if (method === 'DELETE') {
+        const { error } = await userClient.from('suppliers').delete().eq('id', id);
+        if (error) return json({ error: error.message }, 403);
+        return json({ ok: true });
+      }
+      const body = await req.json();
+      const patch = {};
+      for (const k of ['name','contact_name','whatsapp','phone','email','address','notes','is_active']) if (body[k] !== undefined) patch[k] = body[k];
+      const { data, error } = await userClient.from('suppliers').update(patch).eq('id', id).select().single();
+      if (error) return json({ error: error.message }, 403);
+      return json({ supplier: data });
+    }
+
+    // -------- ITEM SUPPLIERS (price history) --------
+    if (method === 'GET' && path === 'item-suppliers') {
+      const { user, supabase } = await getAuthContext(req);
+      if (!user) return json({ error: 'Unauthorized' }, 401);
+      const url = new URL(req.url);
+      const item_id = url.searchParams.get('item_id');
+      const supplier_id = url.searchParams.get('supplier_id');
+      let q = supabase.from('item_suppliers').select('*, item:items(name), supplier:suppliers(name), unit:units!item_suppliers_price_unit_id_fkey(code,name)').order('effective_from', { ascending: false });
+      if (item_id) q = q.eq('item_id', item_id);
+      if (supplier_id) q = q.eq('supplier_id', supplier_id);
+      const { data, error } = await q;
+      if (error) return json({ error: error.message }, 403);
+      return json({ prices: data });
+    }
+    if (method === 'POST' && path === 'item-suppliers') {
+      const { user, token } = await getAuthContext(req);
+      if (!user) return json({ error: 'Unauthorized' }, 401);
+      const body = await req.json();
+      const userClient = getUserSupabase(token);
+      // Close previous active price for same supplier+item
+      await userClient.from('item_suppliers').update({ is_active: false, effective_to: new Date().toISOString() })
+        .eq('supplier_id', body.supplier_id).eq('item_id', body.item_id).eq('is_active', true);
+      const { data, error } = await userClient.from('item_suppliers').insert({
+        supplier_id: body.supplier_id, item_id: body.item_id,
+        current_price: body.current_price, price_unit_id: body.price_unit_id || null,
+        is_active: true,
+      }).select().single();
+      if (error) return json({ error: error.message }, 403);
+      return json({ price: data });
+    }
+
+    // -------- PURCHASE REQUESTS --------
+    if (method === 'GET' && path === 'purchase-requests') {
+      const { user, supabase } = await getAuthContext(req);
+      if (!user) return json({ error: 'Unauthorized' }, 401);
+      const { data, error } = await supabase.from('purchase_requests')
+        .select('*, items:purchase_request_items(*, unit:units(code, name), item:items(id, name))')
+        .order('created_at', { ascending: false });
+      if (error) return json({ error: error.message }, 403);
+      return json({ requests: data });
+    }
+    if (method === 'POST' && path === 'purchase-requests') {
+      const { user, token } = await getAuthContext(req);
+      if (!user) return json({ error: 'Unauthorized' }, 401);
+      const body = await req.json();
+      const userClient = getUserSupabase(token);
+      const { data: me } = await userClient.from('employees').select('outlet_id, name, role').eq('auth_user_id', user.id).maybeSingle();
+      // Create request
+      const { data: pr, error } = await userClient.from('purchase_requests').insert({
+        outlet_id: body.outlet_id || me?.outlet_id,
+        requested_by: user.id,
+        requester_name: me?.name || null,
+        requester_role: me?.role || null,
+        original_text: body.original_text || null,
+        notes: body.notes || null,
+        status: body.status || 'DRAFT',
+      }).select().single();
+      if (error) return json({ error: error.message }, 403);
+      // Insert items
+      if (Array.isArray(body.items) && body.items.length) {
+        const rows = body.items.map(it => ({
+          purchase_request_id: pr.id,
+          item_id: it.item_id || null,
+          item_name_text: it.item_name_text || null,
+          quantity: it.quantity,
+          unit_id: it.unit_id || null,
+          unit_text: it.unit_text || null,
+          notes: it.notes || null,
+          needs_review: !it.item_id || !it.unit_id,
+        }));
+        const { error: iErr } = await userClient.from('purchase_request_items').insert(rows);
+        if (iErr) return json({ error: iErr.message }, 400);
+      }
+      return json({ request: pr });
+    }
+    if (path.startsWith('purchase-requests/') && !path.includes('/', 18)) {
+      const id = path.split('/')[1];
+      const { user, token } = await getAuthContext(req);
+      if (!user) return json({ error: 'Unauthorized' }, 401);
+      const userClient = getUserSupabase(token);
+      if (method === 'GET') {
+        const { data, error } = await userClient.from('purchase_requests')
+          .select('*, items:purchase_request_items(*, unit:units(code, name), item:items(id, name))')
+          .eq('id', id).maybeSingle();
+        if (error) return json({ error: error.message }, 403);
+        return json({ request: data });
+      }
+      if (method === 'PATCH') {
+        const body = await req.json();
+        const patch = {};
+        for (const k of ['status','notes','original_text']) if (body[k] !== undefined) patch[k] = body[k];
+        const { data, error } = await userClient.from('purchase_requests').update(patch).eq('id', id).select().single();
+        if (error) return json({ error: error.message }, 403);
+        return json({ request: data });
+      }
+      if (method === 'DELETE') {
+        const { error } = await userClient.from('purchase_requests').delete().eq('id', id);
+        if (error) return json({ error: error.message }, 403);
+        return json({ ok: true });
+      }
+    }
+
+    // -------- PURCHASE ORDERS --------
+    if (method === 'GET' && path === 'purchase-orders') {
+      const { user, supabase } = await getAuthContext(req);
+      if (!user) return json({ error: 'Unauthorized' }, 401);
+      const { data, error } = await supabase.from('purchase_orders')
+        .select('*, supplier:suppliers(id, name, whatsapp, phone), items:purchase_order_items(*, item:items(name), purchase_unit:units!purchase_order_items_purchase_unit_id_fkey(code), stock_unit:units!purchase_order_items_stock_unit_id_fkey(code))')
+        .order('created_at', { ascending: false });
+      if (error) return json({ error: error.message }, 403);
+      return json({ orders: data });
+    }
+    if (method === 'POST' && path === 'purchase-orders') {
+      const { user, token } = await getAuthContext(req);
+      if (!user) return json({ error: 'Unauthorized' }, 401);
+      const body = await req.json();
+      const admin = getAdminSupabase();
+      const userClient = getUserSupabase(token);
+
+      if (body.idempotency_key) {
+        const { data: existing } = await admin.from('purchase_orders').select('*, items:purchase_order_items(*)').eq('idempotency_key', body.idempotency_key).maybeSingle();
+        if (existing) return json({ order: existing, idempotent: true });
+      }
+
+      const { data: me } = await userClient.from('employees').select('outlet_id').eq('auth_user_id', user.id).maybeSingle();
+      const outlet_id = body.outlet_id || me?.outlet_id;
+
+      // Generate PO number if not provided
+      let po_number = body.po_number;
+      if (!po_number) {
+        const { count } = await admin.from('purchase_orders').select('*', { count: 'exact', head: true }).eq('outlet_id', outlet_id);
+        po_number = 'PO-' + new Date().toISOString().slice(0,10).replace(/-/g,'') + '-' + String((count || 0) + 1).padStart(3, '0');
+      }
+
+      const { data: po, error } = await userClient.from('purchase_orders').insert({
+        outlet_id, supplier_id: body.supplier_id,
+        purchase_request_id: body.purchase_request_id || null,
+        po_number, order_date: body.order_date || new Date().toISOString().slice(0,10),
+        expected_date: body.expected_date || null,
+        status: 'ORDERED', notes: body.notes || null,
+        created_by: user.id, idempotency_key: body.idempotency_key || null,
+      }).select().single();
+      if (error) {
+        if (error.code === '23505' && body.idempotency_key) {
+          const { data: dup } = await admin.from('purchase_orders').select('*').eq('idempotency_key', body.idempotency_key).maybeSingle();
+          if (dup) return json({ order: dup, idempotent: true });
+        }
+        return json({ error: error.message }, 403);
+      }
+
+      // Insert items with snapshots
+      if (Array.isArray(body.items)) {
+        const itemRows = [];
+        for (const it of body.items) {
+          const { data: itemRow } = await admin.from('items').select('name, stock_unit_id').eq('id', it.item_id).maybeSingle();
+          const stockUnitId = itemRow?.stock_unit_id || null;
+          let purchaseUnitSnapshot = null;
+          if (it.purchase_unit_id) {
+            const { data: u } = await admin.from('units').select('code, name').eq('id', it.purchase_unit_id).maybeSingle();
+            purchaseUnitSnapshot = u ? `${u.code} — ${u.name}` : null;
+          }
+          itemRows.push({
+            purchase_order_id: po.id,
+            item_id: it.item_id,
+            item_name_snapshot: itemRow?.name || it.item_name || 'Item',
+            ordered_qty: it.ordered_qty,
+            purchase_unit_id: it.purchase_unit_id || null,
+            purchase_unit_snapshot: purchaseUnitSnapshot,
+            stock_unit_id: stockUnitId,
+            conversion_ratio_snapshot: it.conversion_ratio_snapshot ?? 1,
+            unit_price: it.unit_price ?? 0,
+          });
+        }
+        const { error: iErr } = await userClient.from('purchase_order_items').insert(itemRows);
+        if (iErr) return json({ error: iErr.message }, 400);
+      }
+
+      // If linked to PR, mark PR PROCESSING
+      if (body.purchase_request_id) {
+        await userClient.from('purchase_requests').update({ status: 'PROCESSING' }).eq('id', body.purchase_request_id);
+      }
+
+      const { data: full } = await userClient.from('purchase_orders').select('*, supplier:suppliers(*), items:purchase_order_items(*)').eq('id', po.id).maybeSingle();
+      return json({ order: full });
+    }
+
+    if (path.startsWith('purchase-orders/') && !path.includes('/receiving')) {
+      const parts = path.split('/');
+      const id = parts[1];
+      const { user, token, supabase } = await getAuthContext(req);
+      if (!user) return json({ error: 'Unauthorized' }, 401);
+      const userClient = getUserSupabase(token);
+      if (method === 'GET') {
+        const { data, error } = await userClient.from('purchase_orders')
+          .select('*, supplier:suppliers(*), items:purchase_order_items(*, item:items(name, stock_unit_id), purchase_unit:units!purchase_order_items_purchase_unit_id_fkey(code, name))')
+          .eq('id', id).maybeSingle();
+        if (error) return json({ error: error.message }, 403);
+        return json({ order: data });
+      }
+    }
+
+    // -------- RECEIVINGS --------
+    if (method === 'GET' && path === 'receivings') {
+      const { user, supabase } = await getAuthContext(req);
+      if (!user) return json({ error: 'Unauthorized' }, 401);
+      const url = new URL(req.url);
+      const po_id = url.searchParams.get('purchase_order_id');
+      let q = supabase.from('receivings')
+        .select('*, po:purchase_orders(po_number, supplier_id, supplier:suppliers(name)), items:receiving_items(*, item:items(name))')
+        .order('created_at', { ascending: false });
+      if (po_id) q = q.eq('purchase_order_id', po_id);
+      const { data, error } = await q;
+      if (error) return json({ error: error.message }, 403);
+      return json({ receivings: data });
+    }
+    if (method === 'POST' && path === 'receivings') {
+      const { user, token } = await getAuthContext(req);
+      if (!user) return json({ error: 'Unauthorized' }, 401);
+      const body = await req.json();
+      const admin = getAdminSupabase();
+      const userClient = getUserSupabase(token);
+
+      if (body.idempotency_key) {
+        const { data: existing } = await admin.from('receivings').select('*').eq('idempotency_key', body.idempotency_key).maybeSingle();
+        if (existing) return json({ receiving: existing, idempotent: true });
+      }
+
+      const { data: po } = await admin.from('purchase_orders').select('outlet_id').eq('id', body.purchase_order_id).maybeSingle();
+      if (!po) return json({ error: 'PO tidak ditemukan' }, 404);
+
+      const { data: rec, error } = await userClient.from('receivings').insert({
+        outlet_id: po.outlet_id,
+        purchase_order_id: body.purchase_order_id,
+        received_by: user.id,
+        received_at: body.received_at || new Date().toISOString(),
+        status: 'POSTED', notes: body.notes || null,
+        photo_path: body.photo_path || null,
+        idempotency_key: body.idempotency_key || null,
+      }).select().single();
+      if (error) {
+        if (error.code === '23505' && body.idempotency_key) {
+          const { data: dup } = await admin.from('receivings').select('*').eq('idempotency_key', body.idempotency_key).maybeSingle();
+          if (dup) return json({ receiving: dup, idempotent: true });
+        }
+        return json({ error: error.message }, 403);
+      }
+
+      // Insert receiving items (trigger will create stock movements & update PO)
+      const rows = [];
+      for (const it of (body.items || [])) {
+        // Snapshot fields from POI
+        const { data: poi } = await admin.from('purchase_order_items').select('*').eq('id', it.purchase_order_item_id).maybeSingle();
+        if (!poi) continue;
+        if (Number(it.received_qty) <= 0) continue;
+        rows.push({
+          receiving_id: rec.id,
+          purchase_order_item_id: poi.id,
+          item_id: poi.item_id,
+          ordered_qty_snapshot: poi.ordered_qty,
+          received_qty: it.received_qty,
+          purchase_unit_id: poi.purchase_unit_id,
+          stock_unit_id: poi.stock_unit_id,
+          conversion_ratio_snapshot: poi.conversion_ratio_snapshot,
+        });
+      }
+      if (rows.length) {
+        const { error: rErr } = await userClient.from('receiving_items').insert(rows);
+        if (rErr) return json({ error: rErr.message }, 400);
+      }
+
+      const { data: full } = await userClient.from('receivings')
+        .select('*, items:receiving_items(*, item:items(name)), po:purchase_orders(po_number, status)')
+        .eq('id', rec.id).maybeSingle();
+      return json({ receiving: full });
+    }
+
+    // -------- BILLS --------
+    if (method === 'GET' && path === 'bills') {
+      const { user, supabase } = await getAuthContext(req);
+      if (!user) return json({ error: 'Unauthorized' }, 401);
+      const { data, error } = await supabase.from('bills')
+        .select('*, supplier:suppliers(name, whatsapp), receivings:bill_receivings(receiving_id, receiving:receivings(id, received_at, po:purchase_orders(po_number)))')
+        .order('bill_date', { ascending: false });
+      if (error) return json({ error: error.message }, 403);
+      // enrich with status
+      const ids = (data || []).map(b => b.id);
+      let statusMap = {};
+      if (ids.length) {
+        const { data: sv } = await supabase.from('bill_status_view').select('*').in('bill_id', ids);
+        statusMap = Object.fromEntries((sv || []).map(s => [s.bill_id, s]));
+      }
+      const rows = (data || []).map(b => ({ ...b, ...(statusMap[b.id] || {}) }));
+      return json({ bills: rows });
+    }
+    if (method === 'POST' && path === 'bills') {
+      const { user, token } = await getAuthContext(req);
+      if (!user) return json({ error: 'Unauthorized' }, 401);
+      const body = await req.json();
+      const admin = getAdminSupabase();
+      const userClient = getUserSupabase(token);
+
+      if (body.idempotency_key) {
+        const { data: existing } = await admin.from('bills').select('*').eq('idempotency_key', body.idempotency_key).maybeSingle();
+        if (existing) return json({ bill: existing, idempotent: true });
+      }
+
+      const { data: me } = await userClient.from('employees').select('outlet_id').eq('auth_user_id', user.id).maybeSingle();
+      let bill_number = body.bill_number;
+      if (!bill_number) {
+        const { count } = await admin.from('bills').select('*', { count: 'exact', head: true }).eq('outlet_id', me?.outlet_id);
+        bill_number = 'BILL-' + new Date().toISOString().slice(0,10).replace(/-/g,'') + '-' + String((count || 0) + 1).padStart(3,'0');
+      }
+      const { data: bill, error } = await userClient.from('bills').insert({
+        outlet_id: body.outlet_id || me?.outlet_id,
+        supplier_id: body.supplier_id,
+        bill_number,
+        bill_date: body.bill_date || new Date().toISOString().slice(0,10),
+        due_date: body.due_date || null,
+        total_amount: body.total_amount,
+        notes: body.notes || null,
+        photo_path: body.photo_path || null,
+        created_by: user.id,
+        idempotency_key: body.idempotency_key || null,
+      }).select().single();
+      if (error) return json({ error: error.message }, 403);
+
+      if (Array.isArray(body.receiving_ids) && body.receiving_ids.length) {
+        const rows = body.receiving_ids.map(rid => ({ bill_id: bill.id, receiving_id: rid }));
+        const { error: brErr } = await userClient.from('bill_receivings').insert(rows);
+        if (brErr) return json({ error: brErr.message }, 400);
+      }
+      return json({ bill });
+    }
+
+    // -------- PAYMENTS --------
+    if (method === 'GET' && path === 'payments') {
+      const { user, supabase } = await getAuthContext(req);
+      if (!user) return json({ error: 'Unauthorized' }, 401);
+      const url = new URL(req.url);
+      const bill_id = url.searchParams.get('bill_id');
+      let q = supabase.from('payments').select('*, bill:bills(bill_number)').order('payment_date', { ascending: false });
+      if (bill_id) q = q.eq('bill_id', bill_id);
+      const { data, error } = await q;
+      if (error) return json({ error: error.message }, 403);
+      return json({ payments: data });
+    }
+    if (method === 'POST' && path === 'payments') {
+      const { user, token } = await getAuthContext(req);
+      if (!user) return json({ error: 'Unauthorized' }, 401);
+      const body = await req.json();
+      const admin = getAdminSupabase();
+      const userClient = getUserSupabase(token);
+
+      if (body.idempotency_key) {
+        const { data: existing } = await admin.from('payments').select('*').eq('idempotency_key', body.idempotency_key).maybeSingle();
+        if (existing) return json({ payment: existing, idempotent: true });
+      }
+
+      const { data: bill } = await admin.from('bills').select('outlet_id').eq('id', body.bill_id).maybeSingle();
+      if (!bill) return json({ error: 'Bill tidak ditemukan' }, 404);
+
+      const { data: pay, error } = await userClient.from('payments').insert({
+        outlet_id: bill.outlet_id,
+        bill_id: body.bill_id,
+        amount: body.amount,
+        payment_date: body.payment_date || new Date().toISOString().slice(0,10),
+        method: body.method || 'TRANSFER',
+        reference: body.reference || null,
+        proof_file: body.proof_file || null,
+        parent_transaction_id: body.parent_transaction_id || null,
+        created_by: user.id,
+        idempotency_key: body.idempotency_key || null,
+      }).select().single();
+      if (error) {
+        if (error.code === '23505' && body.idempotency_key) {
+          const { data: dup } = await admin.from('payments').select('*').eq('idempotency_key', body.idempotency_key).maybeSingle();
+          if (dup) return json({ payment: dup, idempotent: true });
+        }
+        return json({ error: error.message }, 403);
+      }
+
+      // Return new bill status
+      const { data: sv } = await admin.from('bill_status_view').select('*').eq('bill_id', body.bill_id).maybeSingle();
+      return json({ payment: pay, bill_status: sv });
+    }
+
+    // -------- STORAGE (receipts photos) --------
+    // POST /api/storage/upload - multipart form with file, folder (receiving/bill/payment)
+    if (method === 'POST' && path === 'storage/upload') {
+      const { user } = await getAuthContext(req);
+      if (!user) return json({ error: 'Unauthorized' }, 401);
+      const admin = getAdminSupabase();
+      const form = await req.formData();
+      const file = form.get('file');
+      const folder = form.get('folder') || 'misc';
+      if (!file) return json({ error: 'File wajib' }, 400);
+      const ts = Date.now();
+      const ext = (file.name || 'jpg').split('.').pop();
+      const path = `${folder}/${user.id}/${ts}.${ext}`;
+      const arrayBuffer = await file.arrayBuffer();
+      const { data, error } = await admin.storage.from('receipts').upload(path, Buffer.from(arrayBuffer), {
+        contentType: file.type || 'image/jpeg', upsert: false,
+      });
+      if (error) return json({ error: error.message }, 400);
+      return json({ path: data.path });
+    }
+
+    // GET /api/storage/signed?path=xxx  -> returns short-lived signed URL
+    if (method === 'GET' && path === 'storage/signed') {
+      const { user } = await getAuthContext(req);
+      if (!user) return json({ error: 'Unauthorized' }, 401);
+      const url = new URL(req.url);
+      const p = url.searchParams.get('path');
+      if (!p) return json({ error: 'path wajib' }, 400);
+      const admin = getAdminSupabase();
+      const { data, error } = await admin.storage.from('receipts').createSignedUrl(p, 60 * 10);
+      if (error) return json({ error: error.message }, 400);
+      return json({ signed_url: data.signedUrl });
+    }
+
     return json({ error: 'Not found', path, method }, 404);
   } catch (e) {
     return json({ error: e.message || 'Server error' }, 500);

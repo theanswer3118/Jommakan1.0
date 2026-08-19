@@ -12,7 +12,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, Dialog
 import { Textarea } from '@/components/ui/textarea';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { toast, Toaster } from 'sonner';
-import { LogOut, LayoutDashboard, Users, Package, Settings as SettingsIcon, ScrollText, Loader2, Utensils, Shield, Plus, Trash2, Edit, Boxes, ArrowUpCircle, ArrowDownCircle, RefreshCw, Ban, Trash, ClipboardCheck, AlertTriangle, History } from 'lucide-react';
+import { LogOut, LayoutDashboard, Users, Package, Settings as SettingsIcon, ScrollText, Loader2, Utensils, Shield, Plus, Trash2, Edit, Boxes, ArrowUpCircle, ArrowDownCircle, RefreshCw, Ban, Trash, ClipboardCheck, AlertTriangle, History, Building2, FileText, ShoppingCart, Truck, Receipt, CreditCard, MessageCircle, Upload, ExternalLink, ImageIcon } from 'lucide-react';
 
 const ROLES = ['OWNER','MANAGER','PURCHASING','KITCHEN','BAR','SERVICE','STOCK'];
 
@@ -137,6 +137,12 @@ function Nav({ current, onNav, permissions, onLogout, me }) {
     { key: 'employees', label: 'Karyawan', icon: Users, perm: 'view_employee' },
     { key: 'items', label: 'Items', icon: Package, perm: 'view_items' },
     { key: 'stock', label: 'Stock', icon: Boxes, perm: 'view_stock' },
+    { key: 'suppliers', label: 'Supplier', icon: Building2, perm: 'view_suppliers' },
+    { key: 'requests', label: 'Purchase Req', icon: FileText, perm: 'view_purchase_requests' },
+    { key: 'orders', label: 'Purchase Order', icon: ShoppingCart, perm: 'create_po' },
+    { key: 'receivings', label: 'Receiving', icon: Truck, perm: 'view_receiving' },
+    { key: 'bills', label: 'Bills', icon: Receipt, perm: 'view_bills' },
+    { key: 'payments', label: 'Payments', icon: CreditCard, perm: 'view_payments' },
     { key: 'settings', label: 'Settings', icon: SettingsIcon, perm: 'view_settings' },
     { key: 'audit', label: 'Audit Log', icon: ScrollText, perm: 'view_audit_log' },
   ].filter(i => permissions.includes(i.perm));
@@ -838,6 +844,599 @@ function Stock({ api, permissions }) {
   );
 }
 
+function Suppliers({ api, permissions }) {
+  const [list, setList] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [open, setOpen] = useState(false);
+  const [editing, setEditing] = useState(null);
+  const [form, setForm] = useState({ name:'', contact_name:'', whatsapp:'', phone:'', email:'', address:'', notes:'', is_active:true });
+  const canManage = permissions.includes('manage_suppliers');
+  const load = async () => { setLoading(true); try { setList((await api('suppliers')).suppliers || []); } catch(e){toast.error(e.message);} finally { setLoading(false); }};
+  useEffect(()=>{ load(); },[]);
+
+  const submit = async (e) => { e.preventDefault();
+    try {
+      if (editing) { await api(`suppliers/${editing.id}`,{method:'PATCH',body:JSON.stringify(form)}); toast.success('Supplier diperbarui'); }
+      else { await api('suppliers',{method:'POST',body:JSON.stringify(form)}); toast.success('Supplier ditambahkan'); }
+      setOpen(false); setEditing(null); setForm({ name:'', contact_name:'', whatsapp:'', phone:'', email:'', address:'', notes:'', is_active:true });
+      load();
+    } catch(e){toast.error(e.message);}
+  };
+  const openWa = (s) => {
+    if (!s.whatsapp) { toast.error('Nomor WhatsApp belum diisi'); return; }
+    const msg = `Halo ${s.contact_name || s.name},\nJOM MAKAN ingin memesan barang.\nMohon konfirmasi ketersediaan.`;
+    window.open(`https://wa.me/${s.whatsapp.replace(/[^0-9]/g,'')}?text=${encodeURIComponent(msg)}`, '_blank');
+  };
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div><h1 className="text-2xl font-bold">Supplier</h1><p className="text-sm text-gray-500">Master data supplier</p></div>
+        {canManage && <Dialog open={open} onOpenChange={v=>{setOpen(v); if(!v)setEditing(null);}}>
+          <DialogTrigger asChild><Button className="bg-orange-500 hover:bg-orange-600"><Plus className="w-4 h-4 mr-1" />Tambah</Button></DialogTrigger>
+          <DialogContent><DialogHeader><DialogTitle>{editing?'Edit':'Tambah'} Supplier</DialogTitle></DialogHeader>
+            <form onSubmit={submit} className="space-y-3">
+              <div><Label>Nama</Label><Input value={form.name} onChange={e=>setForm({...form,name:e.target.value})} required/></div>
+              <div><Label>Contact Name</Label><Input value={form.contact_name} onChange={e=>setForm({...form,contact_name:e.target.value})}/></div>
+              <div className="grid grid-cols-2 gap-3">
+                <div><Label>WhatsApp</Label><Input value={form.whatsapp} onChange={e=>setForm({...form,whatsapp:e.target.value})} placeholder="6281234"/></div>
+                <div><Label>Phone</Label><Input value={form.phone} onChange={e=>setForm({...form,phone:e.target.value})}/></div>
+              </div>
+              <div><Label>Email</Label><Input value={form.email} onChange={e=>setForm({...form,email:e.target.value})}/></div>
+              <div><Label>Alamat</Label><Textarea value={form.address} onChange={e=>setForm({...form,address:e.target.value})} rows={2}/></div>
+              <div><Label>Notes</Label><Textarea value={form.notes} onChange={e=>setForm({...form,notes:e.target.value})} rows={2}/></div>
+              <DialogFooter><Button type="submit">{editing?'Simpan':'Tambah'}</Button></DialogFooter>
+            </form>
+          </DialogContent></Dialog>}
+      </div>
+      <Card><CardContent className="p-0 overflow-x-auto">
+        {loading ? <div className="p-8 text-center"><Loader2 className="w-6 h-6 animate-spin mx-auto text-orange-500"/></div> :
+          <Table>
+            <TableHeader><TableRow><TableHead>Nama</TableHead><TableHead>Contact</TableHead><TableHead>WhatsApp</TableHead><TableHead>Status</TableHead><TableHead className="text-right">Aksi</TableHead></TableRow></TableHeader>
+            <TableBody>{list.map(s=><TableRow key={s.id}>
+              <TableCell className="font-medium">{s.name}</TableCell>
+              <TableCell>{s.contact_name||'-'}</TableCell>
+              <TableCell className="font-mono text-xs">{s.whatsapp||'-'}</TableCell>
+              <TableCell><Badge variant={s.is_active?'default':'secondary'}>{s.is_active?'Aktif':'Nonaktif'}</Badge></TableCell>
+              <TableCell className="text-right space-x-1 whitespace-nowrap">
+                {s.whatsapp && <Button size="sm" variant="outline" onClick={()=>openWa(s)}><MessageCircle className="w-4 h-4 mr-1"/>WA</Button>}
+                {canManage && <Button size="sm" variant="ghost" onClick={()=>{setEditing(s); setForm({...s, is_active: s.is_active!==false}); setOpen(true);}}><Edit className="w-4 h-4"/></Button>}
+              </TableCell>
+            </TableRow>)}{list.length===0 && <TableRow><TableCell colSpan={5} className="text-center text-gray-500 py-8">Belum ada supplier</TableCell></TableRow>}</TableBody>
+          </Table>}
+      </CardContent></Card>
+    </div>
+  );
+}
+
+function parseRequestText(text) {
+  // Very simple parser: split by comma/newline, then extract "<name> <qty> <unit>"
+  const lines = text.split(/[\n,;]+/).map(s=>s.trim()).filter(Boolean);
+  const unitMap = { kg:'KG', gr:'GR', g:'GR', gram:'GR', ltr:'LTR', liter:'LTR', l:'LTR', ml:'ML', pcs:'PCS', pc:'PCS', pack:'PACK', pak:'PACK', box:'BOX', dus:'BOX', tray:'PCS' };
+  return lines.map(line => {
+    const m = line.match(/^(.+?)\s+(\d+(?:[.,]\d+)?)\s*([A-Za-z]+)?\.?$/);
+    if (!m) return { item_name_text: line, quantity: 0, unit_text: '', notes: 'parse gagal' };
+    const [_, name, qty, unit] = m;
+    const uLower = (unit||'').toLowerCase();
+    return { item_name_text: name.trim(), quantity: parseFloat(qty.replace(',','.')), unit_text: unit||'', unit_code: unitMap[uLower]||null };
+  });
+}
+
+function PurchaseRequests({ api, permissions, me }) {
+  const [list, setList] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [open, setOpen] = useState(false);
+  const [items, setItems] = useState([]);
+  const [text, setText] = useState('');
+  const [parsed, setParsed] = useState([]);
+  const [units, setUnits] = useState([]);
+  const [dbItems, setDbItems] = useState([]);
+  const canCreate = permissions.includes('create_purchase_request');
+  const canProcess = permissions.includes('process_purchase_requests');
+
+  const load = async () => { setLoading(true); try {
+    const [r,u,it] = await Promise.all([api('purchase-requests'), api('units'), api('items')]);
+    setList(r.requests || []); setUnits(u.units || []); setDbItems(it.items || []);
+  } catch(e){toast.error(e.message);} finally { setLoading(false); }};
+  useEffect(()=>{ load(); items;setItems; },[]);
+
+  const doParse = () => {
+    if (!text.trim()) return;
+    const rows = parseRequestText(text);
+    // Attempt to map to db items and units
+    const mapped = rows.map(r => {
+      const matchItem = dbItems.find(i => i.name.toLowerCase().includes(r.item_name_text.toLowerCase().slice(0,6)));
+      const matchUnit = units.find(u => u.code === r.unit_code);
+      return { ...r, item_id: matchItem?.id || null, unit_id: matchUnit?.id || null };
+    });
+    setParsed(mapped);
+  };
+
+  const submit = async () => {
+    try {
+      await api('purchase-requests', { method:'POST', body: JSON.stringify({
+        original_text: text,
+        status: 'SUBMITTED',
+        items: parsed.map(p => ({
+          item_id: p.item_id, item_name_text: p.item_name_text,
+          quantity: p.quantity, unit_id: p.unit_id, unit_text: p.unit_text, notes: p.notes || null,
+        })),
+      })});
+      toast.success('Purchase request submitted');
+      setOpen(false); setText(''); setParsed([]);
+      load();
+    } catch(e){toast.error(e.message);}
+  };
+
+  const updateStatus = async (id, status) => {
+    try { await api(`purchase-requests/${id}`,{method:'PATCH',body:JSON.stringify({status})}); toast.success('Status diperbarui'); load();}
+    catch(e){toast.error(e.message);}
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div><h1 className="text-2xl font-bold">Purchase Request</h1><p className="text-sm text-gray-500">Ajukan kebutuhan pembelian</p></div>
+        {canCreate && <Dialog open={open} onOpenChange={setOpen}>
+          <DialogTrigger asChild><Button className="bg-orange-500 hover:bg-orange-600"><Plus className="w-4 h-4 mr-1"/>Buat Request</Button></DialogTrigger>
+          <DialogContent className="max-w-2xl"><DialogHeader><DialogTitle>Purchase Request</DialogTitle></DialogHeader>
+            <div className="space-y-3">
+              <div><Label>Tulis kebutuhan (contoh: Ayam 30 kg, minyak 10 liter, telur 5 tray)</Label>
+                <Textarea rows={4} value={text} onChange={e=>setText(e.target.value)} placeholder="Ayam 30 kg, minyak 10 liter, telur 5 tray"/>
+              </div>
+              <Button variant="outline" onClick={doParse} disabled={!text.trim()}><RefreshCw className="w-4 h-4 mr-1"/>Parse Otomatis</Button>
+              {parsed.length > 0 && (
+                <div className="border rounded p-3 space-y-2 max-h-64 overflow-y-auto">
+                  <p className="text-xs text-gray-500">Draft — periksa & edit sebelum submit:</p>
+                  {parsed.map((p,idx)=><div key={idx} className="grid grid-cols-12 gap-2 items-end text-sm">
+                    <div className="col-span-5"><Label className="text-xs">Item</Label>
+                      <Select value={p.item_id||'unknown'} onValueChange={v=>{const c=[...parsed]; c[idx]={...c[idx],item_id: v==='unknown'?null:v}; setParsed(c);}}>
+                        <SelectTrigger><SelectValue placeholder={p.item_name_text}/></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="unknown">— (perlu review) —</SelectItem>
+                          {dbItems.map(i=><SelectItem key={i.id} value={i.id}>{i.name}</SelectItem>)}
+                        </SelectContent>
+                      </Select>
+                      <div className="text-xs text-gray-400">{p.item_name_text}</div>
+                    </div>
+                    <div className="col-span-3"><Label className="text-xs">Qty</Label><Input type="number" step="0.001" value={p.quantity} onChange={e=>{const c=[...parsed]; c[idx]={...c[idx],quantity:parseFloat(e.target.value)}; setParsed(c);}}/></div>
+                    <div className="col-span-3"><Label className="text-xs">Unit</Label>
+                      <Select value={p.unit_id||'unknown'} onValueChange={v=>{const c=[...parsed]; c[idx]={...c[idx],unit_id: v==='unknown'?null:v}; setParsed(c);}}>
+                        <SelectTrigger><SelectValue placeholder={p.unit_text||'-'}/></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="unknown">— (review) —</SelectItem>
+                          {units.map(u=><SelectItem key={u.id} value={u.id}>{u.code}</SelectItem>)}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="col-span-1"><Button size="sm" variant="ghost" onClick={()=>setParsed(parsed.filter((_,i)=>i!==idx))}><Trash2 className="w-4 h-4 text-red-500"/></Button></div>
+                  </div>)}
+                </div>
+              )}
+              <DialogFooter><Button onClick={submit} disabled={parsed.length===0}>Submit</Button></DialogFooter>
+            </div>
+          </DialogContent></Dialog>}
+      </div>
+      <Card><CardContent className="p-0 overflow-x-auto">
+        {loading ? <div className="p-8 text-center"><Loader2 className="w-6 h-6 animate-spin mx-auto text-orange-500"/></div> :
+          <Table><TableHeader><TableRow><TableHead>Waktu</TableHead><TableHead>Requester</TableHead><TableHead>Items</TableHead><TableHead>Status</TableHead>{canProcess && <TableHead>Aksi</TableHead>}</TableRow></TableHeader>
+            <TableBody>{list.map(r=><TableRow key={r.id}>
+              <TableCell className="text-xs whitespace-nowrap">{new Date(r.created_at).toLocaleString('id-ID')}</TableCell>
+              <TableCell><div className="font-medium">{r.requester_name||'-'}</div><Badge variant="outline">{r.requester_role||'-'}</Badge></TableCell>
+              <TableCell className="text-xs max-w-md"><div>{r.original_text || '-'}</div><div className="text-gray-500 mt-1">{(r.items||[]).map(i=>`${i.item?.name||i.item_name_text} ${i.quantity} ${i.unit?.code||i.unit_text||''}`).join(', ')}</div></TableCell>
+              <TableCell><Badge>{r.status}</Badge></TableCell>
+              {canProcess && <TableCell className="whitespace-nowrap">
+                {r.status==='SUBMITTED' && <>
+                  <Button size="sm" variant="outline" onClick={()=>updateStatus(r.id,'PROCESSING')}>Proses</Button>{' '}
+                  <Button size="sm" variant="ghost" onClick={()=>updateStatus(r.id,'REJECTED')}>Tolak</Button>
+                </>}
+                {r.status==='PROCESSING' && <Button size="sm" variant="outline" onClick={()=>updateStatus(r.id,'COMPLETED')}>Complete</Button>}
+              </TableCell>}
+            </TableRow>)}{list.length===0 && <TableRow><TableCell colSpan={canProcess?5:4} className="text-center text-gray-500 py-8">Belum ada request</TableCell></TableRow>}</TableBody></Table>}
+      </CardContent></Card>
+    </div>
+  );
+}
+
+function PurchaseOrders({ api, permissions }) {
+  const [list, setList] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [open, setOpen] = useState(false);
+  const [suppliers, setSuppliers] = useState([]);
+  const [dbItems, setDbItems] = useState([]);
+  const [units, setUnits] = useState([]);
+  const [requests, setRequests] = useState([]);
+  const [supId, setSupId] = useState('');
+  const [prId, setPrId] = useState('');
+  const [poItems, setPoItems] = useState([]);
+  const canCreate = permissions.includes('create_po');
+
+  const load = async () => { setLoading(true); try {
+    const [o,s,i,u,r] = await Promise.all([api('purchase-orders'), api('suppliers'), api('items'), api('units'), api('purchase-requests').catch(()=>({requests:[]}))]);
+    setList(o.orders||[]); setSuppliers(s.suppliers||[]); setDbItems(i.items||[]); setUnits(u.units||[]); setRequests((r.requests||[]).filter(x=>x.status==='PROCESSING'||x.status==='SUBMITTED'));
+  } catch(e){toast.error(e.message);} finally { setLoading(false); }};
+  useEffect(()=>{ load(); },[]);
+
+  const addLine = () => setPoItems([...poItems, { item_id:'', ordered_qty:1, purchase_unit_id:'', unit_price:0 }]);
+  const submit = async () => {
+    try {
+      const key = `po-ui-${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
+      const rows = poItems.filter(x=>x.item_id && x.ordered_qty>0);
+      if (!supId || rows.length===0) throw new Error('Supplier dan minimal 1 item wajib');
+      const res = await api('purchase-orders', { method:'POST', body: JSON.stringify({
+        supplier_id: supId,
+        purchase_request_id: prId||null,
+        idempotency_key: key,
+        items: rows.map(r=>({ item_id: r.item_id, ordered_qty: Number(r.ordered_qty), purchase_unit_id: r.purchase_unit_id||null, unit_price: Number(r.unit_price||0), conversion_ratio_snapshot: 1 })),
+      })});
+      toast.success(`PO ${res.order.po_number} dibuat`);
+      setOpen(false); setSupId(''); setPrId(''); setPoItems([]);
+      load();
+    } catch(e){toast.error(e.message);}
+  };
+
+  const waSupplier = (order) => {
+    const sup = order.supplier;
+    if (!sup?.whatsapp) { toast.error('Supplier belum ada WhatsApp'); return; }
+    const lines = (order.items||[]).map(i=>`- ${i.item_name_snapshot} ${i.ordered_qty} ${i.purchase_unit_snapshot||''}`).join('\n');
+    const msg = `Halo ${sup.contact_name||sup.name},\nJOM MAKAN ingin memesan (PO ${order.po_number}):\n${lines}\n\nMohon konfirmasi ketersediaan dan harga.`;
+    window.open(`https://wa.me/${sup.whatsapp.replace(/[^0-9]/g,'')}?text=${encodeURIComponent(msg)}`,'_blank');
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div><h1 className="text-2xl font-bold">Purchase Order</h1><p className="text-sm text-gray-500">Kelola PO ke supplier</p></div>
+        {canCreate && <Dialog open={open} onOpenChange={setOpen}>
+          <DialogTrigger asChild><Button className="bg-orange-500 hover:bg-orange-600"><Plus className="w-4 h-4 mr-1"/>Buat PO</Button></DialogTrigger>
+          <DialogContent className="max-w-3xl"><DialogHeader><DialogTitle>PO Baru</DialogTitle></DialogHeader>
+            <div className="space-y-3">
+              <div className="grid grid-cols-2 gap-3">
+                <div><Label>Supplier</Label>
+                  <Select value={supId} onValueChange={setSupId}>
+                    <SelectTrigger><SelectValue placeholder="Pilih supplier"/></SelectTrigger>
+                    <SelectContent>{suppliers.map(s=><SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}</SelectContent>
+                  </Select>
+                </div>
+                <div><Label>Purchase Request (opsional)</Label>
+                  <Select value={prId||'none'} onValueChange={v=>setPrId(v==='none'?'':v)}>
+                    <SelectTrigger><SelectValue placeholder="Tanpa PR"/></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">— Tanpa PR —</SelectItem>
+                      {requests.map(r=><SelectItem key={r.id} value={r.id}>{r.requester_name} · {new Date(r.created_at).toLocaleDateString('id-ID')}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <Label>Items</Label>
+                  <Button size="sm" variant="outline" onClick={addLine}><Plus className="w-3 h-3 mr-1"/>Baris</Button>
+                </div>
+                <div className="space-y-2 max-h-64 overflow-y-auto">
+                  {poItems.map((r,idx)=><div key={idx} className="grid grid-cols-12 gap-2 items-end text-sm">
+                    <div className="col-span-4"><Label className="text-xs">Item</Label>
+                      <Select value={r.item_id} onValueChange={v=>{const c=[...poItems]; c[idx]={...c[idx],item_id:v}; setPoItems(c);}}>
+                        <SelectTrigger><SelectValue placeholder="Pilih"/></SelectTrigger>
+                        <SelectContent>{dbItems.map(i=><SelectItem key={i.id} value={i.id}>{i.name}</SelectItem>)}</SelectContent>
+                      </Select>
+                    </div>
+                    <div className="col-span-2"><Label className="text-xs">Qty</Label><Input type="number" step="0.001" value={r.ordered_qty} onChange={e=>{const c=[...poItems]; c[idx]={...c[idx],ordered_qty:e.target.value}; setPoItems(c);}}/></div>
+                    <div className="col-span-2"><Label className="text-xs">Unit</Label>
+                      <Select value={r.purchase_unit_id} onValueChange={v=>{const c=[...poItems]; c[idx]={...c[idx],purchase_unit_id:v}; setPoItems(c);}}>
+                        <SelectTrigger><SelectValue placeholder="-"/></SelectTrigger>
+                        <SelectContent>{units.map(u=><SelectItem key={u.id} value={u.id}>{u.code}</SelectItem>)}</SelectContent>
+                      </Select>
+                    </div>
+                    <div className="col-span-3"><Label className="text-xs">Harga/unit</Label><Input type="number" step="0.01" value={r.unit_price} onChange={e=>{const c=[...poItems]; c[idx]={...c[idx],unit_price:e.target.value}; setPoItems(c);}}/></div>
+                    <div className="col-span-1"><Button size="sm" variant="ghost" onClick={()=>setPoItems(poItems.filter((_,i)=>i!==idx))}><Trash2 className="w-4 h-4 text-red-500"/></Button></div>
+                  </div>)}
+                </div>
+              </div>
+              <DialogFooter><Button onClick={submit}>Buat PO</Button></DialogFooter>
+            </div>
+          </DialogContent></Dialog>}
+      </div>
+      <Card><CardContent className="p-0 overflow-x-auto">
+        {loading ? <div className="p-8 text-center"><Loader2 className="w-6 h-6 animate-spin mx-auto text-orange-500"/></div> :
+          <Table><TableHeader><TableRow><TableHead>PO Number</TableHead><TableHead>Supplier</TableHead><TableHead>Items</TableHead><TableHead>Total</TableHead><TableHead>Status</TableHead><TableHead>Aksi</TableHead></TableRow></TableHeader>
+            <TableBody>{list.map(o=><TableRow key={o.id}>
+              <TableCell className="font-mono text-xs">{o.po_number}<div className="text-gray-500">{new Date(o.order_date).toLocaleDateString('id-ID')}</div></TableCell>
+              <TableCell>{o.supplier?.name}</TableCell>
+              <TableCell className="text-xs">{(o.items||[]).map(i=>`${i.item_name_snapshot} ${i.ordered_qty}/${i.received_qty}${i.purchase_unit_snapshot?' ':''}`).join(', ')}</TableCell>
+              <TableCell className="text-right font-mono">{(o.items||[]).reduce((s,i)=>s+Number(i.total||0),0).toLocaleString('id-ID')}</TableCell>
+              <TableCell><Badge variant={o.status==='COMPLETE'?'default':o.status==='PARTIAL'?'secondary':'outline'}>{o.status}</Badge></TableCell>
+              <TableCell className="whitespace-nowrap">
+                {o.supplier?.whatsapp && <Button size="sm" variant="outline" onClick={()=>waSupplier(o)}><MessageCircle className="w-4 h-4 mr-1"/>WA</Button>}
+              </TableCell>
+            </TableRow>)}{list.length===0 && <TableRow><TableCell colSpan={6} className="text-center text-gray-500 py-8">Belum ada PO</TableCell></TableRow>}</TableBody></Table>}
+      </CardContent></Card>
+    </div>
+  );
+}
+
+function Receivings({ api, permissions, session }) {
+  const [list, setList] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [open, setOpen] = useState(false);
+  const [orders, setOrders] = useState([]);
+  const [poId, setPoId] = useState('');
+  const [rows, setRows] = useState([]);
+  const [notes, setNotes] = useState('');
+  const [photoPath, setPhotoPath] = useState('');
+  const [uploading, setUploading] = useState(false);
+  const canCreate = permissions.includes('create_receiving');
+
+  const load = async () => { setLoading(true); try {
+    const [r, o] = await Promise.all([api('receivings'), api('purchase-orders')]);
+    setList(r.receivings||[]); setOrders((o.orders||[]).filter(x=>x.status!=='COMPLETE'&&x.status!=='CANCELLED'));
+  } catch(e){toast.error(e.message);} finally { setLoading(false); }};
+  useEffect(()=>{ load(); },[]);
+
+  const chooseOrder = (id) => {
+    setPoId(id);
+    const po = orders.find(o=>o.id===id);
+    setRows((po?.items||[]).map(i=>({ purchase_order_item_id:i.id, item_name:i.item_name_snapshot, ordered_qty:i.ordered_qty, already_received:i.received_qty, received_qty: Math.max(0, i.ordered_qty - i.received_qty) })));
+  };
+
+  const uploadPhoto = async (e) => {
+    const file = e.target.files?.[0]; if (!file) return;
+    setUploading(true);
+    try {
+      const fd = new FormData();
+      fd.append('file', file); fd.append('folder','receiving');
+      const res = await fetch('/api/storage/upload', { method:'POST', headers: { Authorization:`Bearer ${session.access_token}` }, body: fd });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error||'Upload gagal');
+      setPhotoPath(data.path); toast.success('Foto bon terupload');
+    } catch(e){toast.error(e.message);}
+    finally { setUploading(false); }
+  };
+
+  const submit = async () => {
+    try {
+      const key = `rec-${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
+      await api('receivings', { method:'POST', body: JSON.stringify({
+        purchase_order_id: poId,
+        notes, photo_path: photoPath||null,
+        idempotency_key: key,
+        items: rows.filter(r=>Number(r.received_qty)>0).map(r=>({ purchase_order_item_id: r.purchase_order_item_id, received_qty: Number(r.received_qty) })),
+      })});
+      toast.success('Receiving disimpan. Stock diperbarui.');
+      setOpen(false); setPoId(''); setRows([]); setNotes(''); setPhotoPath('');
+      load();
+    } catch(e){toast.error(e.message);}
+  };
+
+  const viewPhoto = async (p) => {
+    try { const r = await api(`storage/signed?path=${encodeURIComponent(p)}`); window.open(r.signed_url,'_blank'); }
+    catch(e){toast.error(e.message);}
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div><h1 className="text-2xl font-bold">Receiving</h1><p className="text-sm text-gray-500">Terima barang dari PO. Stock otomatis update.</p></div>
+        {canCreate && <Dialog open={open} onOpenChange={setOpen}>
+          <DialogTrigger asChild><Button className="bg-orange-500 hover:bg-orange-600"><Plus className="w-4 h-4 mr-1"/>Receiving Baru</Button></DialogTrigger>
+          <DialogContent className="max-w-3xl"><DialogHeader><DialogTitle>Receiving</DialogTitle></DialogHeader>
+            <div className="space-y-3">
+              <div><Label>PO</Label>
+                <Select value={poId} onValueChange={chooseOrder}>
+                  <SelectTrigger><SelectValue placeholder="Pilih PO yang belum lengkap"/></SelectTrigger>
+                  <SelectContent>{orders.map(o=><SelectItem key={o.id} value={o.id}>{o.po_number} · {o.supplier?.name}</SelectItem>)}</SelectContent>
+                </Select>
+              </div>
+              {rows.length>0 && <div className="space-y-2 max-h-64 overflow-y-auto border rounded p-2">
+                {rows.map((r,idx)=><div key={idx} className="grid grid-cols-12 gap-2 items-end text-sm">
+                  <div className="col-span-5"><div className="font-medium">{r.item_name}</div><div className="text-xs text-gray-500">Ordered {r.ordered_qty} · Received {r.already_received}</div></div>
+                  <div className="col-span-4"><Label className="text-xs">Diterima sekarang</Label><Input type="number" step="0.001" value={r.received_qty} onChange={e=>{const c=[...rows]; c[idx]={...c[idx],received_qty:e.target.value}; setRows(c);}}/></div>
+                  <div className="col-span-3 text-xs text-gray-500">Sisa: {(r.ordered_qty - r.already_received).toFixed(3)}</div>
+                </div>)}
+              </div>}
+              <div><Label>Foto Bon (opsional)</Label>
+                <Input type="file" accept="image/*" onChange={uploadPhoto} disabled={uploading}/>
+                {uploading && <p className="text-xs text-gray-500 mt-1">Uploading...</p>}
+                {photoPath && <p className="text-xs text-green-600 mt-1"><ImageIcon className="w-3 h-3 inline mr-1"/>Terupload: {photoPath}</p>}
+              </div>
+              <div><Label>Notes</Label><Textarea rows={2} value={notes} onChange={e=>setNotes(e.target.value)}/></div>
+              <DialogFooter><Button onClick={submit} disabled={!poId||rows.every(r=>!r.received_qty)}>Simpan Receiving</Button></DialogFooter>
+            </div>
+          </DialogContent></Dialog>}
+      </div>
+      <Card><CardContent className="p-0 overflow-x-auto">
+        {loading ? <div className="p-8 text-center"><Loader2 className="w-6 h-6 animate-spin mx-auto text-orange-500"/></div> :
+          <Table><TableHeader><TableRow><TableHead>Waktu</TableHead><TableHead>PO</TableHead><TableHead>Supplier</TableHead><TableHead>Items Diterima</TableHead><TableHead>Foto</TableHead></TableRow></TableHeader>
+            <TableBody>{list.map(r=><TableRow key={r.id}>
+              <TableCell className="text-xs whitespace-nowrap">{new Date(r.received_at).toLocaleString('id-ID')}</TableCell>
+              <TableCell className="font-mono text-xs">{r.po?.po_number}</TableCell>
+              <TableCell>{r.po?.supplier?.name}</TableCell>
+              <TableCell className="text-xs">{(r.items||[]).map(i=>`${i.item?.name} +${i.received_qty}`).join(', ')}</TableCell>
+              <TableCell>{r.photo_path ? <Button size="sm" variant="outline" onClick={()=>viewPhoto(r.photo_path)}><ImageIcon className="w-4 h-4"/></Button> : '-'}</TableCell>
+            </TableRow>)}{list.length===0 && <TableRow><TableCell colSpan={5} className="text-center text-gray-500 py-8">Belum ada receiving</TableCell></TableRow>}</TableBody></Table>}
+      </CardContent></Card>
+    </div>
+  );
+}
+
+function Bills({ api, permissions, session }) {
+  const [list, setList] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [open, setOpen] = useState(false);
+  const [suppliers, setSuppliers] = useState([]);
+  const [receivings, setReceivings] = useState([]);
+  const [form, setForm] = useState({ supplier_id:'', total_amount:'', due_date:'', notes:'', receiving_ids:[] });
+  const [photoPath, setPhotoPath] = useState('');
+  const [uploading, setUploading] = useState(false);
+  const canCreate = permissions.includes('create_bill');
+
+  const load = async () => { setLoading(true); try {
+    const [b, s, r] = await Promise.all([api('bills'), api('suppliers'), api('receivings').catch(()=>({receivings:[]}))]);
+    setList(b.bills||[]); setSuppliers(s.suppliers||[]); setReceivings(r.receivings||[]);
+  } catch(e){toast.error(e.message);} finally { setLoading(false); }};
+  useEffect(()=>{ load(); },[]);
+
+  const uploadPhoto = async (e) => {
+    const file = e.target.files?.[0]; if (!file) return;
+    setUploading(true);
+    try {
+      const fd = new FormData(); fd.append('file', file); fd.append('folder','bill');
+      const res = await fetch('/api/storage/upload', { method:'POST', headers: { Authorization:`Bearer ${session.access_token}` }, body: fd });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      setPhotoPath(data.path); toast.success('Foto bon terupload');
+    } catch(e){toast.error(e.message);} finally { setUploading(false); }
+  };
+
+  const submit = async () => {
+    try {
+      await api('bills', { method:'POST', body: JSON.stringify({...form, total_amount: Number(form.total_amount), photo_path: photoPath||null, idempotency_key: `bill-${Date.now()}`})});
+      toast.success('Bill dibuat');
+      setOpen(false); setForm({ supplier_id:'', total_amount:'', due_date:'', notes:'', receiving_ids:[] }); setPhotoPath('');
+      load();
+    } catch(e){toast.error(e.message);}
+  };
+
+  const viewPhoto = async (p) => { try { const r = await api(`storage/signed?path=${encodeURIComponent(p)}`); window.open(r.signed_url,'_blank'); } catch(e){toast.error(e.message);} };
+
+  const filteredRecs = receivings.filter(r => r.po?.supplier_id === form.supplier_id);
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div><h1 className="text-2xl font-bold">Bills</h1><p className="text-sm text-gray-500">Tagihan dari supplier</p></div>
+        {canCreate && <Dialog open={open} onOpenChange={setOpen}>
+          <DialogTrigger asChild><Button className="bg-orange-500 hover:bg-orange-600"><Plus className="w-4 h-4 mr-1"/>Bill Baru</Button></DialogTrigger>
+          <DialogContent><DialogHeader><DialogTitle>Bill Baru</DialogTitle></DialogHeader>
+            <div className="space-y-3">
+              <div><Label>Supplier</Label>
+                <Select value={form.supplier_id} onValueChange={v=>setForm({...form,supplier_id:v,receiving_ids:[]})}>
+                  <SelectTrigger><SelectValue placeholder="Pilih supplier"/></SelectTrigger>
+                  <SelectContent>{suppliers.map(s=><SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}</SelectContent>
+                </Select>
+              </div>
+              <div><Label>Total Amount (IDR)</Label><Input type="number" step="0.01" value={form.total_amount} onChange={e=>setForm({...form,total_amount:e.target.value})}/></div>
+              <div><Label>Due Date</Label><Input type="date" value={form.due_date} onChange={e=>setForm({...form,due_date:e.target.value})}/></div>
+              {form.supplier_id && filteredRecs.length>0 && <div>
+                <Label>Hubungkan Receivings ({filteredRecs.length} tersedia)</Label>
+                <div className="max-h-40 overflow-y-auto border rounded p-2 text-sm space-y-1">
+                  {filteredRecs.map(r=><label key={r.id} className="flex items-center gap-2">
+                    <input type="checkbox" checked={form.receiving_ids.includes(r.id)} onChange={e=>{
+                      const ids = e.target.checked ? [...form.receiving_ids, r.id] : form.receiving_ids.filter(x=>x!==r.id);
+                      setForm({...form, receiving_ids: ids});
+                    }}/>
+                    <span className="font-mono text-xs">{r.po?.po_number}</span> · {new Date(r.received_at).toLocaleDateString('id-ID')} · {(r.items||[]).length} item
+                  </label>)}
+                </div>
+              </div>}
+              <div><Label>Foto Bon</Label><Input type="file" accept="image/*" onChange={uploadPhoto} disabled={uploading}/>{photoPath && <p className="text-xs text-green-600 mt-1">Terupload</p>}</div>
+              <div><Label>Notes</Label><Textarea value={form.notes} onChange={e=>setForm({...form,notes:e.target.value})} rows={2}/></div>
+              <DialogFooter><Button onClick={submit} disabled={!form.supplier_id||!form.total_amount}>Simpan Bill</Button></DialogFooter>
+            </div>
+          </DialogContent></Dialog>}
+      </div>
+      <Card><CardContent className="p-0 overflow-x-auto">
+        {loading ? <div className="p-8 text-center"><Loader2 className="w-6 h-6 animate-spin mx-auto text-orange-500"/></div> :
+          <Table><TableHeader><TableRow><TableHead>Bill#</TableHead><TableHead>Supplier</TableHead><TableHead>Tgl</TableHead><TableHead className="text-right">Total</TableHead><TableHead className="text-right">Terbayar</TableHead><TableHead>Status</TableHead><TableHead>Foto</TableHead></TableRow></TableHeader>
+            <TableBody>{list.map(b=><TableRow key={b.id}>
+              <TableCell className="font-mono text-xs">{b.bill_number}</TableCell>
+              <TableCell>{b.supplier?.name}</TableCell>
+              <TableCell className="text-xs">{new Date(b.bill_date).toLocaleDateString('id-ID')}</TableCell>
+              <TableCell className="text-right font-mono">{Number(b.total_amount).toLocaleString('id-ID')}</TableCell>
+              <TableCell className="text-right font-mono">{Number(b.paid_amount||0).toLocaleString('id-ID')}</TableCell>
+              <TableCell><Badge variant={b.status==='PAID'?'default':b.status==='PARTIAL'?'secondary':b.status==='OVERPAID'?'destructive':'outline'}>{b.status||'UNPAID'}</Badge></TableCell>
+              <TableCell>{b.photo_path ? <Button size="sm" variant="outline" onClick={()=>viewPhoto(b.photo_path)}><ImageIcon className="w-4 h-4"/></Button> : '-'}</TableCell>
+            </TableRow>)}{list.length===0 && <TableRow><TableCell colSpan={7} className="text-center text-gray-500 py-8">Belum ada bill</TableCell></TableRow>}</TableBody></Table>}
+      </CardContent></Card>
+    </div>
+  );
+}
+
+function Payments({ api, permissions, session }) {
+  const [list, setList] = useState([]);
+  const [bills, setBills] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [open, setOpen] = useState(false);
+  const [form, setForm] = useState({ bill_id:'', amount:'', payment_date: new Date().toISOString().slice(0,10), method:'TRANSFER', reference:'' });
+  const [proofPath, setProofPath] = useState('');
+  const [uploading, setUploading] = useState(false);
+  const canCreate = permissions.includes('create_payment');
+
+  const load = async () => { setLoading(true); try {
+    const [p, b] = await Promise.all([api('payments'), api('bills')]);
+    setList(p.payments||[]); setBills((b.bills||[]).filter(x=>x.status!=='PAID'));
+  } catch(e){toast.error(e.message);} finally { setLoading(false); }};
+  useEffect(()=>{ load(); },[]);
+
+  const uploadProof = async (e) => {
+    const file = e.target.files?.[0]; if (!file) return;
+    setUploading(true);
+    try {
+      const fd = new FormData(); fd.append('file', file); fd.append('folder','payment');
+      const res = await fetch('/api/storage/upload', { method:'POST', headers: { Authorization:`Bearer ${session.access_token}` }, body: fd });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      setProofPath(data.path); toast.success('Bukti terupload');
+    } catch(e){toast.error(e.message);} finally { setUploading(false); }
+  };
+
+  const submit = async () => {
+    try {
+      const key = `pay-${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
+      const res = await api('payments', { method:'POST', body: JSON.stringify({ ...form, amount: Number(form.amount), proof_file: proofPath||null, idempotency_key: key })});
+      toast.success(`Payment tersimpan. Status bill: ${res.bill_status?.status||'-'}`);
+      setOpen(false); setForm({ bill_id:'', amount:'', payment_date: new Date().toISOString().slice(0,10), method:'TRANSFER', reference:'' }); setProofPath('');
+      load();
+    } catch(e){toast.error(e.message);}
+  };
+
+  const viewProof = async (p) => { try { const r = await api(`storage/signed?path=${encodeURIComponent(p)}`); window.open(r.signed_url,'_blank'); } catch(e){toast.error(e.message);} };
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div><h1 className="text-2xl font-bold">Payments</h1><p className="text-sm text-gray-500">Pembayaran ke supplier</p></div>
+        {canCreate && <Dialog open={open} onOpenChange={setOpen}>
+          <DialogTrigger asChild><Button className="bg-orange-500 hover:bg-orange-600"><Plus className="w-4 h-4 mr-1"/>Payment</Button></DialogTrigger>
+          <DialogContent><DialogHeader><DialogTitle>Payment Baru</DialogTitle></DialogHeader>
+            <div className="space-y-3">
+              <div><Label>Bill</Label>
+                <Select value={form.bill_id} onValueChange={v=>setForm({...form,bill_id:v})}>
+                  <SelectTrigger><SelectValue placeholder="Pilih bill"/></SelectTrigger>
+                  <SelectContent>{bills.map(b=><SelectItem key={b.id} value={b.id}>{b.bill_number} · {b.supplier?.name} · {Number(b.total_amount).toLocaleString('id-ID')} ({b.status})</SelectItem>)}</SelectContent>
+                </Select>
+              </div>
+              <div><Label>Amount (IDR)</Label><Input type="number" step="0.01" value={form.amount} onChange={e=>setForm({...form,amount:e.target.value})}/></div>
+              <div className="grid grid-cols-2 gap-3">
+                <div><Label>Tgl</Label><Input type="date" value={form.payment_date} onChange={e=>setForm({...form,payment_date:e.target.value})}/></div>
+                <div><Label>Method</Label>
+                  <Select value={form.method} onValueChange={v=>setForm({...form,method:v})}>
+                    <SelectTrigger><SelectValue/></SelectTrigger>
+                    <SelectContent>{['CASH','TRANSFER','QRIS','CARD','OTHER'].map(m=><SelectItem key={m} value={m}>{m}</SelectItem>)}</SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <div><Label>Reference</Label><Input value={form.reference} onChange={e=>setForm({...form,reference:e.target.value})}/></div>
+              <div><Label>Bukti Transfer</Label><Input type="file" accept="image/*" onChange={uploadProof} disabled={uploading}/>{proofPath && <p className="text-xs text-green-600 mt-1">Terupload</p>}</div>
+              <DialogFooter><Button onClick={submit} disabled={!form.bill_id||!form.amount}>Simpan Payment</Button></DialogFooter>
+            </div>
+          </DialogContent></Dialog>}
+      </div>
+      <Card><CardContent className="p-0 overflow-x-auto">
+        {loading ? <div className="p-8 text-center"><Loader2 className="w-6 h-6 animate-spin mx-auto text-orange-500"/></div> :
+          <Table><TableHeader><TableRow><TableHead>Tgl</TableHead><TableHead>Bill</TableHead><TableHead className="text-right">Amount</TableHead><TableHead>Method</TableHead><TableHead>Reference</TableHead><TableHead>Bukti</TableHead></TableRow></TableHeader>
+            <TableBody>{list.map(p=><TableRow key={p.id}>
+              <TableCell className="text-xs">{new Date(p.payment_date).toLocaleDateString('id-ID')}</TableCell>
+              <TableCell className="font-mono text-xs">{p.bill?.bill_number}</TableCell>
+              <TableCell className="text-right font-mono">{Number(p.amount).toLocaleString('id-ID')}</TableCell>
+              <TableCell><Badge variant="outline">{p.method}</Badge></TableCell>
+              <TableCell className="text-xs">{p.reference||'-'}</TableCell>
+              <TableCell>{p.proof_file ? <Button size="sm" variant="outline" onClick={()=>viewProof(p.proof_file)}><ImageIcon className="w-4 h-4"/></Button> : '-'}</TableCell>
+            </TableRow>)}{list.length===0 && <TableRow><TableCell colSpan={6} className="text-center text-gray-500 py-8">Belum ada payment</TableCell></TableRow>}</TableBody></Table>}
+      </CardContent></Card>
+    </div>
+  );
+}
+
 const App = () => {  const [session, setSession] = useState(null);
   const [me, setMe] = useState(null);
   const [permissions, setPermissions] = useState([]);
@@ -901,6 +1500,12 @@ const App = () => {  const [session, setSession] = useState(null);
         {page === 'employees' && permissions.includes('view_employee') && <Employees api={api} permissions={permissions} />}
         {page === 'items' && permissions.includes('view_items') && <Items api={api} permissions={permissions} />}
         {page === 'stock' && permissions.includes('view_stock') && <Stock api={api} permissions={permissions} />}
+        {page === 'suppliers' && permissions.includes('view_suppliers') && <Suppliers api={api} permissions={permissions} />}
+        {page === 'requests' && permissions.includes('view_purchase_requests') && <PurchaseRequests api={api} permissions={permissions} me={me} />}
+        {page === 'orders' && permissions.includes('create_po') && <PurchaseOrders api={api} permissions={permissions} />}
+        {page === 'receivings' && permissions.includes('view_receiving') && <Receivings api={api} permissions={permissions} session={session} />}
+        {page === 'bills' && permissions.includes('view_bills') && <Bills api={api} permissions={permissions} session={session} />}
+        {page === 'payments' && permissions.includes('view_payments') && <Payments api={api} permissions={permissions} session={session} />}
         {page === 'settings' && permissions.includes('view_settings') && <SettingsPage api={api} permissions={permissions} />}
         {page === 'audit' && permissions.includes('view_audit_log') && <AuditLogs api={api} />}
       </main>
