@@ -12,7 +12,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, Dialog
 import { Textarea } from '@/components/ui/textarea';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { toast, Toaster } from 'sonner';
-import { LogOut, LayoutDashboard, Users, Package, Settings as SettingsIcon, ScrollText, Loader2, Utensils, Shield, Plus, Trash2, Edit, Boxes, ArrowUpCircle, ArrowDownCircle, RefreshCw, Ban, Trash, ClipboardCheck, AlertTriangle, History, Building2, FileText, ShoppingCart, Truck, Receipt, CreditCard, MessageCircle, Upload, ExternalLink, ImageIcon } from 'lucide-react';
+import { LogOut, LayoutDashboard, Users, Package, Settings as SettingsIcon, ScrollText, Loader2, Utensils, Shield, Plus, Trash2, Edit, Boxes, ArrowUpCircle, ArrowDownCircle, RefreshCw, Ban, Trash, ClipboardCheck, AlertTriangle, History, Building2, FileText, ShoppingCart, Truck, Receipt, CreditCard, MessageCircle, Upload, ExternalLink, ImageIcon, Zap, ShoppingBag, Clock, DollarSign } from 'lucide-react';
 
 const ROLES = ['OWNER','MANAGER','PURCHASING','KITCHEN','BAR','SERVICE','STOCK'];
 
@@ -137,6 +137,7 @@ function Nav({ current, onNav, permissions, onLogout, me }) {
     { key: 'employees', label: 'Karyawan', icon: Users, perm: 'view_employee' },
     { key: 'items', label: 'Items', icon: Package, perm: 'view_items' },
     { key: 'stock', label: 'Stock', icon: Boxes, perm: 'view_stock' },
+    { key: 'quick', label: 'Belanja Cepat', icon: Zap, perm: 'create_po' },
     { key: 'suppliers', label: 'Supplier', icon: Building2, perm: 'view_suppliers' },
     { key: 'requests', label: 'Purchase Req', icon: FileText, perm: 'view_purchase_requests' },
     { key: 'orders', label: 'Purchase Order', icon: ShoppingCart, perm: 'create_po' },
@@ -191,7 +192,11 @@ function Nav({ current, onNav, permissions, onLogout, me }) {
 
 function Dashboard({ api, me }) {
   const [stats, setStats] = useState(null);
-  useEffect(() => { api('dashboard').then(setStats).catch(e => toast.error(e.message)); }, [api]);
+  const [purchasing, setPurchasing] = useState(null);
+  useEffect(() => {
+    api('dashboard').then(setStats).catch(e => toast.error(e.message));
+    api('dashboard/purchasing').then(setPurchasing).catch(()=>{});
+  }, [api]);
   return (
     <div className="space-y-6">
       <div>
@@ -205,6 +210,43 @@ function Dashboard({ api, me }) {
         <Card className={stats?.negative_stock_count > 0 ? 'border-red-300 bg-red-50' : ''}><CardHeader className="pb-2"><CardDescription>Stok Negatif</CardDescription><CardTitle className={`text-3xl ${stats?.negative_stock_count > 0 ? 'text-red-600' : ''}`}>{stats?.negative_stock_count ?? '-'}</CardTitle></CardHeader></Card>
         <Card><CardHeader className="pb-2"><CardDescription>Audit Log</CardDescription><CardTitle className="text-3xl">{stats?.audit_count ?? '-'}</CardTitle></CardHeader></Card>
       </div>
+      {purchasing && (purchasing.pending_delivery.length > 0 || purchasing.pending_price.length > 0) && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {purchasing.pending_delivery.length > 0 && (
+            <Card className="border-blue-200 bg-blue-50">
+              <CardHeader className="pb-2"><CardTitle className="text-base flex items-center gap-2"><Clock className="w-5 h-5 text-blue-600"/>Menunggu Kedatangan ({purchasing.pending_delivery.length})</CardTitle><CardDescription>Barang sudah dipesan/dibayar, belum sampai</CardDescription></CardHeader>
+              <CardContent className="text-sm space-y-2 max-h-64 overflow-y-auto">
+                {purchasing.pending_delivery.map(po => (
+                  <div key={po.id} className="border-b pb-2">
+                    <div className="font-medium">{po.supplier?.name}</div>
+                    <div className="text-xs text-gray-500 font-mono">{po.po_number} · {new Date(po.order_date).toLocaleDateString('id-ID')}</div>
+                    <div className="text-xs">{(po.items||[]).map(i=>`${i.item_name_snapshot} ${i.received_qty}/${i.ordered_qty}`).join(', ')}</div>
+                  </div>
+                ))}
+              </CardContent>
+            </Card>
+          )}
+          {purchasing.pending_price.length > 0 && (
+            <Card className="border-yellow-300 bg-yellow-50">
+              <CardHeader className="pb-2"><CardTitle className="text-base flex items-center gap-2"><DollarSign className="w-5 h-5 text-yellow-700"/>Menunggu Harga Supplier ({purchasing.pending_price.length})</CardTitle><CardDescription>Barang sudah diterima, supplier belum kasih harga</CardDescription></CardHeader>
+              <CardContent className="text-sm space-y-2 max-h-64 overflow-y-auto">
+                {purchasing.pending_price.map(b => (
+                  <div key={b.id} className="border-b pb-2 flex items-center justify-between">
+                    <div>
+                      <div className="font-medium">{b.supplier?.name}</div>
+                      <div className="text-xs text-gray-500 font-mono">{b.bill_number} · {new Date(b.bill_date).toLocaleDateString('id-ID')}</div>
+                    </div>
+                    {b.supplier?.whatsapp && <Button size="sm" variant="outline" onClick={()=>{
+                      const msg = `Halo ${b.supplier.name}, mohon konfirmasi harga untuk barang tanggal ${new Date(b.bill_date).toLocaleDateString('id-ID')}. Terima kasih.`;
+                      window.open(`https://wa.me/${b.supplier.whatsapp.replace(/[^0-9]/g,'')}?text=${encodeURIComponent(msg)}`,'_blank');
+                    }}><MessageCircle className="w-3 h-3 mr-1"/>Chat</Button>}
+                  </div>
+                ))}
+              </CardContent>
+            </Card>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -1267,6 +1309,7 @@ function Bills({ api, permissions, session }) {
   const [form, setForm] = useState({ supplier_id:'', total_amount:'', due_date:'', notes:'', receiving_ids:[] });
   const [photoPath, setPhotoPath] = useState('');
   const [uploading, setUploading] = useState(false);
+  const [priceOpen, setPriceOpen] = useState(null); // bill with items
   const canCreate = permissions.includes('create_bill');
 
   const load = async () => { setLoading(true); try {
@@ -1297,6 +1340,35 @@ function Bills({ api, permissions, session }) {
   };
 
   const viewPhoto = async (p) => { try { const r = await api(`storage/signed?path=${encodeURIComponent(p)}`); window.open(r.signed_url,'_blank'); } catch(e){toast.error(e.message);} };
+
+  const openSetPrice = async (bill) => {
+    try {
+      // Fetch full PO items via receivings → PO
+      const rIds = (bill.receivings || []).map(br => br.receiving_id);
+      if (rIds.length === 0) { toast.error('Bill tanpa receiving, tidak bisa set harga otomatis'); return; }
+      // fetch receiving details with PO items
+      const recs = await api('receivings');
+      const relatedRecs = (recs.receivings || []).filter(r => rIds.includes(r.id));
+      const poIds = [...new Set(relatedRecs.map(r => r.purchase_order_id))];
+      const orders = await api('purchase-orders');
+      const relatedPOs = (orders.orders || []).filter(o => poIds.includes(o.id));
+      const items = [];
+      for (const po of relatedPOs) {
+        for (const it of (po.items || [])) items.push({ ...it, po_number: po.po_number });
+      }
+      setPriceOpen({ bill, items: items.map(i => ({ ...i, new_price: i.unit_price || '' })) });
+    } catch(e) { toast.error(e.message); }
+  };
+
+  const submitPrices = async () => {
+    try {
+      await api(`bills/${priceOpen.bill.id}/set-prices`, { method: 'PATCH', body: JSON.stringify({
+        items: priceOpen.items.map(i => ({ purchase_order_item_id: i.id, unit_price: Number(i.new_price || 0) })),
+      })});
+      toast.success('Harga tersimpan. Bill siap dibayar.');
+      setPriceOpen(null); load();
+    } catch(e){toast.error(e.message);}
+  };
 
   const filteredRecs = receivings.filter(r => r.po?.supplier_id === form.supplier_id);
 
@@ -1336,17 +1408,40 @@ function Bills({ api, permissions, session }) {
       </div>
       <Card><CardContent className="p-0 overflow-x-auto">
         {loading ? <div className="p-8 text-center"><Loader2 className="w-6 h-6 animate-spin mx-auto text-orange-500"/></div> :
-          <Table><TableHeader><TableRow><TableHead>Bill#</TableHead><TableHead>Supplier</TableHead><TableHead>Tgl</TableHead><TableHead className="text-right">Total</TableHead><TableHead className="text-right">Terbayar</TableHead><TableHead>Status</TableHead><TableHead>Foto</TableHead></TableRow></TableHeader>
-            <TableBody>{list.map(b=><TableRow key={b.id}>
+          <Table><TableHeader><TableRow><TableHead>Bill#</TableHead><TableHead>Supplier</TableHead><TableHead>Tgl</TableHead><TableHead className="text-right">Total</TableHead><TableHead className="text-right">Terbayar</TableHead><TableHead>Status</TableHead><TableHead>Aksi</TableHead></TableRow></TableHeader>
+            <TableBody>{list.map(b=><TableRow key={b.id} className={b.status==='PENDING_PRICE' ? 'bg-yellow-50' : ''}>
               <TableCell className="font-mono text-xs">{b.bill_number}</TableCell>
               <TableCell>{b.supplier?.name}</TableCell>
               <TableCell className="text-xs">{new Date(b.bill_date).toLocaleDateString('id-ID')}</TableCell>
               <TableCell className="text-right font-mono">{Number(b.total_amount).toLocaleString('id-ID')}</TableCell>
               <TableCell className="text-right font-mono">{Number(b.paid_amount||0).toLocaleString('id-ID')}</TableCell>
-              <TableCell><Badge variant={b.status==='PAID'?'default':b.status==='PARTIAL'?'secondary':b.status==='OVERPAID'?'destructive':'outline'}>{b.status||'UNPAID'}</Badge></TableCell>
-              <TableCell>{b.photo_path ? <Button size="sm" variant="outline" onClick={()=>viewPhoto(b.photo_path)}><ImageIcon className="w-4 h-4"/></Button> : '-'}</TableCell>
+              <TableCell><Badge variant={b.status==='PAID'?'default':b.status==='PARTIAL'?'secondary':b.status==='PENDING_PRICE'?'outline':b.status==='OVERPAID'?'destructive':'outline'} className={b.status==='PENDING_PRICE'?'border-yellow-500 text-yellow-700':''}>{b.status||'UNPAID'}</Badge></TableCell>
+              <TableCell className="whitespace-nowrap space-x-1">
+                {b.status==='PENDING_PRICE' && canCreate && <Button size="sm" variant="outline" onClick={()=>openSetPrice(b)}><DollarSign className="w-4 h-4 mr-1"/>Set Harga</Button>}
+                {b.photo_path && <Button size="sm" variant="ghost" onClick={()=>viewPhoto(b.photo_path)}><ImageIcon className="w-4 h-4"/></Button>}
+              </TableCell>
             </TableRow>)}{list.length===0 && <TableRow><TableCell colSpan={7} className="text-center text-gray-500 py-8">Belum ada bill</TableCell></TableRow>}</TableBody></Table>}
       </CardContent></Card>
+
+      {/* Set Prices Dialog */}
+      <Dialog open={!!priceOpen} onOpenChange={v=>!v && setPriceOpen(null)}>
+        <DialogContent><DialogHeader><DialogTitle>Set Harga — {priceOpen?.bill.bill_number}</DialogTitle></DialogHeader>
+          <div className="space-y-2 max-h-96 overflow-y-auto">
+            {priceOpen?.items.map((it, idx) => (
+              <div key={it.id} className="grid grid-cols-12 gap-2 items-end text-sm border-b pb-2">
+                <div className="col-span-6">
+                  <div className="font-medium">{it.item_name_snapshot}</div>
+                  <div className="text-xs text-gray-500">{it.po_number} · {it.ordered_qty} {it.purchase_unit_snapshot||''}</div>
+                </div>
+                <div className="col-span-4"><Label className="text-xs">Harga/unit</Label><Input type="number" step="0.01" value={it.new_price} onChange={e=>{const c=[...priceOpen.items]; c[idx]={...c[idx],new_price:e.target.value}; setPriceOpen({...priceOpen,items:c});}}/></div>
+                <div className="col-span-2 text-right font-mono text-xs">Rp {((Number(it.ordered_qty)||0)*(Number(it.new_price)||0)).toLocaleString('id-ID')}</div>
+              </div>
+            ))}
+          </div>
+          <div className="text-right font-mono font-bold">Total: Rp {(priceOpen?.items||[]).reduce((s,i)=>s+(Number(i.ordered_qty)||0)*(Number(i.new_price)||0),0).toLocaleString('id-ID')}</div>
+          <DialogFooter><Button onClick={submitPrices}>Simpan & Aktifkan Bill</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -1437,6 +1532,204 @@ function Payments({ api, permissions, session }) {
   );
 }
 
+function QuickPurchase({ api, session }) {
+  const [dbItems, setDbItems] = useState([]);
+  const [units, setUnits] = useState([]);
+  const [supplierName, setSupplierName] = useState('');
+  const [matches, setMatches] = useState([]);
+  const [selectedSupplier, setSelectedSupplier] = useState(null);
+  const [lines, setLines] = useState([{ item_id:'', qty:1, unit_price:'' }]);
+  const [payment, setPayment] = useState({ method:'CASH', amount:'', reference:'' });
+  const [received, setReceived] = useState(true);
+  const [pricingPending, setPricingPending] = useState(false);
+  const [photoPath, setPhotoPath] = useState('');
+  const [notes, setNotes] = useState('');
+  const [uploading, setUploading] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    (async () => {
+      const [it, un] = await Promise.all([api('items'), api('units')]);
+      setDbItems(it.items || []); setUnits(un.units || []);
+    })();
+  }, []);
+
+  // Debounced supplier fuzzy search
+  useEffect(() => {
+    if (!supplierName.trim() || selectedSupplier) { setMatches([]); return; }
+    const t = setTimeout(async () => {
+      try { const res = await api(`suppliers/match?q=${encodeURIComponent(supplierName)}`); setMatches(res.matches || []); }
+      catch(e){}
+    }, 300);
+    return () => clearTimeout(t);
+  }, [supplierName, selectedSupplier]);
+
+  const totalNilai = lines.reduce((s, l) => s + (Number(l.qty)||0) * (Number(l.unit_price)||0), 0);
+
+  const uploadPhoto = async (e) => {
+    const file = e.target.files?.[0]; if (!file) return;
+    setUploading(true);
+    try {
+      const fd = new FormData(); fd.append('file', file); fd.append('folder','quick');
+      const res = await fetch('/api/storage/upload', { method:'POST', headers: { Authorization:`Bearer ${session.access_token}` }, body: fd });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      setPhotoPath(data.path); toast.success('Foto terupload');
+    } catch(e){toast.error(e.message);} finally { setUploading(false); }
+  };
+
+  const submit = async () => {
+    setSubmitting(true);
+    try {
+      const items = lines.filter(l => l.item_id && Number(l.qty) > 0).map(l => ({
+        item_id: l.item_id, qty: Number(l.qty),
+        unit_price: pricingPending ? 0 : Number(l.unit_price||0),
+      }));
+      if (items.length === 0) throw new Error('Isi minimal 1 item');
+      if (!selectedSupplier && !supplierName.trim()) throw new Error('Nama supplier wajib');
+
+      const body = {
+        supplier_id: selectedSupplier?.id || null,
+        supplier_name: selectedSupplier ? null : supplierName,
+        items,
+        received,
+        pricing_pending: pricingPending,
+        photo_path: photoPath || null,
+        notes: notes || null,
+        idempotency_key: `qp-${Date.now()}-${Math.random().toString(36).slice(2,8)}`,
+      };
+      if (!pricingPending && payment.amount && Number(payment.amount) > 0) {
+        body.payment = { method: payment.method, amount: Number(payment.amount), reference: payment.reference || null };
+      }
+      const res = await api('quick-purchase', { method:'POST', body: JSON.stringify(body) });
+      toast.success(`Belanja tercatat! PO ${res.po.po_number}${res.receiving ? ' • stok naik' : ' • menunggu barang'}${res.bill.pricing_status==='PENDING' ? ' • MENUNGGU HARGA' : ''}`);
+      // reset
+      setSupplierName(''); setSelectedSupplier(null); setMatches([]);
+      setLines([{ item_id:'', qty:1, unit_price:'' }]);
+      setPayment({ method:'CASH', amount:'', reference:'' });
+      setReceived(true); setPricingPending(false);
+      setPhotoPath(''); setNotes('');
+    } catch(e) { toast.error(e.message); }
+    finally { setSubmitting(false); }
+  };
+
+  return (
+    <div className="space-y-6 max-w-2xl">
+      <div>
+        <h1 className="text-2xl font-bold flex items-center gap-2"><Zap className="w-6 h-6 text-orange-500"/>Belanja Cepat</h1>
+        <p className="text-sm text-gray-500">1 form untuk warung, Shopee, dan belanja kecil lainnya</p>
+      </div>
+
+      <Card><CardContent className="p-6 space-y-4">
+        {/* Supplier */}
+        <div>
+          <Label>Beli dari mana?</Label>
+          {selectedSupplier ? (
+            <div className="flex items-center justify-between p-3 border rounded bg-green-50 border-green-200">
+              <div><div className="font-medium">{selectedSupplier.name}</div>{selectedSupplier.whatsapp && <div className="text-xs text-gray-600">WA: {selectedSupplier.whatsapp}</div>}</div>
+              <Button size="sm" variant="ghost" onClick={()=>{setSelectedSupplier(null); setSupplierName('');}}>Ganti</Button>
+            </div>
+          ) : (
+            <>
+              <Input value={supplierName} onChange={e=>setSupplierName(e.target.value)} placeholder="cth: Warung Bu Susi, Shopee, Toko ABC..." />
+              {matches.length > 0 && (
+                <div className="mt-2 border rounded p-2 space-y-1 bg-orange-50 border-orange-200">
+                  <div className="text-xs text-gray-600 mb-1">💡 Mungkin maksud Anda:</div>
+                  {matches.map(m => (
+                    <button key={m.id} onClick={()=>{setSelectedSupplier(m); setSupplierName(m.name); setMatches([]);}} className="w-full text-left p-2 rounded hover:bg-white flex items-center justify-between text-sm">
+                      <span className="font-medium">{m.name}</span>
+                      <Badge variant="outline" className="text-xs">{m.score}% mirip</Badge>
+                    </button>
+                  ))}
+                  <div className="text-xs text-gray-500 pt-1">Atau tekan Simpan untuk buat supplier baru "<b>{supplierName}</b>"</div>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+
+        {/* Items */}
+        <div>
+          <div className="flex items-center justify-between mb-1">
+            <Label>Beli apa saja?</Label>
+            <Button size="sm" variant="outline" onClick={()=>setLines([...lines, { item_id:'', qty:1, unit_price:'' }])}><Plus className="w-3 h-3 mr-1"/>Baris</Button>
+          </div>
+          <div className="space-y-2">
+            {lines.map((l, idx) => (
+              <div key={idx} className="grid grid-cols-12 gap-2">
+                <div className="col-span-5">
+                  <Select value={l.item_id} onValueChange={v=>{const c=[...lines]; c[idx]={...c[idx],item_id:v}; setLines(c);}}>
+                    <SelectTrigger><SelectValue placeholder="Pilih item"/></SelectTrigger>
+                    <SelectContent>{dbItems.map(i=><SelectItem key={i.id} value={i.id}>{i.name}</SelectItem>)}</SelectContent>
+                  </Select>
+                </div>
+                <div className="col-span-2">
+                  <Input type="number" step="0.001" placeholder="Qty" value={l.qty} onChange={e=>{const c=[...lines]; c[idx]={...c[idx],qty:e.target.value}; setLines(c);}} />
+                </div>
+                <div className="col-span-4">
+                  <Input type="number" step="0.01" placeholder={pricingPending ? "Nanti diisi" : "Harga/unit"} disabled={pricingPending} value={l.unit_price} onChange={e=>{const c=[...lines]; c[idx]={...c[idx],unit_price:e.target.value}; setLines(c);}} />
+                </div>
+                <div className="col-span-1">
+                  {lines.length > 1 && <Button size="sm" variant="ghost" onClick={()=>setLines(lines.filter((_,i)=>i!==idx))}><Trash2 className="w-4 h-4 text-red-500"/></Button>}
+                </div>
+              </div>
+            ))}
+          </div>
+          {!pricingPending && <div className="text-right text-sm mt-2 font-mono">Total: <span className="font-bold">Rp {totalNilai.toLocaleString('id-ID')}</span></div>}
+        </div>
+
+        {/* Toggles */}
+        <div className="space-y-2 border-t pt-4">
+          <label className="flex items-center gap-3 cursor-pointer">
+            <input type="checkbox" checked={received} onChange={e=>setReceived(e.target.checked)} className="w-4 h-4"/>
+            <div>
+              <div className="font-medium text-sm">Barangnya sudah diterima?</div>
+              <div className="text-xs text-gray-500">Centang jika barang sudah di tangan (warung, COD selesai). Kosongkan jika masih diperjalanan (Shopee).</div>
+            </div>
+          </label>
+          <label className="flex items-center gap-3 cursor-pointer">
+            <input type="checkbox" checked={pricingPending} onChange={e=>{setPricingPending(e.target.checked); if(e.target.checked)setPayment({...payment,amount:''});}} className="w-4 h-4"/>
+            <div>
+              <div className="font-medium text-sm">Harga belum ada?</div>
+              <div className="text-xs text-gray-500">Centang kalau supplier belum kasih harga. Bill jadi MENUNGGU HARGA — belum bisa dibayar sampai harga di-update.</div>
+            </div>
+          </label>
+        </div>
+
+        {/* Payment (only if not pricing pending) */}
+        {!pricingPending && (
+          <div className="border-t pt-4 space-y-3">
+            <Label>Pembayaran</Label>
+            <div className="grid grid-cols-3 gap-2">
+              <Select value={payment.method} onValueChange={v=>setPayment({...payment,method:v})}>
+                <SelectTrigger><SelectValue/></SelectTrigger>
+                <SelectContent>{['CASH','TRANSFER','QRIS','CARD','OTHER'].map(m=><SelectItem key={m} value={m}>{m}</SelectItem>)}</SelectContent>
+              </Select>
+              <Input type="number" placeholder="Nominal bayar" value={payment.amount} onChange={e=>setPayment({...payment,amount:e.target.value})}/>
+              <Input placeholder="Ref/no. transaksi" value={payment.reference} onChange={e=>setPayment({...payment,reference:e.target.value})}/>
+            </div>
+            <p className="text-xs text-gray-500">Kosongkan nominal jika belum bayar (contoh: bon berjalan)</p>
+          </div>
+        )}
+
+        {/* Photo + Notes */}
+        <div className="border-t pt-4 space-y-3">
+          <div>
+            <Label>Foto struk/bon (opsional)</Label>
+            <Input type="file" accept="image/*" onChange={uploadPhoto} disabled={uploading}/>
+            {photoPath && <p className="text-xs text-green-600 mt-1">✅ Terupload</p>}
+          </div>
+          <div><Label>Catatan (opsional)</Label><Textarea rows={2} value={notes} onChange={e=>setNotes(e.target.value)}/></div>
+        </div>
+
+        <Button className="w-full bg-orange-500 hover:bg-orange-600 h-12 text-base" onClick={submit} disabled={submitting}>
+          {submitting ? <Loader2 className="w-4 h-4 animate-spin"/> : <><Zap className="w-4 h-4 mr-2"/>Simpan Belanja</>}
+        </Button>
+      </CardContent></Card>
+    </div>
+  );
+}
+
 const App = () => {  const [session, setSession] = useState(null);
   const [me, setMe] = useState(null);
   const [permissions, setPermissions] = useState([]);
@@ -1500,6 +1793,7 @@ const App = () => {  const [session, setSession] = useState(null);
         {page === 'employees' && permissions.includes('view_employee') && <Employees api={api} permissions={permissions} />}
         {page === 'items' && permissions.includes('view_items') && <Items api={api} permissions={permissions} />}
         {page === 'stock' && permissions.includes('view_stock') && <Stock api={api} permissions={permissions} />}
+        {page === 'quick' && permissions.includes('create_po') && <QuickPurchase api={api} session={session} />}
         {page === 'suppliers' && permissions.includes('view_suppliers') && <Suppliers api={api} permissions={permissions} />}
         {page === 'requests' && permissions.includes('view_purchase_requests') && <PurchaseRequests api={api} permissions={permissions} me={me} />}
         {page === 'orders' && permissions.includes('create_po') && <PurchaseOrders api={api} permissions={permissions} />}

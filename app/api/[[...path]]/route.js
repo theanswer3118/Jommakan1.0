@@ -1083,6 +1083,248 @@ async function handler(req, { params }) {
       return json({ signed_url: data.signedUrl });
     }
 
+    // ============ PHASE 2.5: QUICK PURCHASE ============
+
+    // Fuzzy match supplier by name
+    // GET /api/suppliers/match?q=<name>
+    if (method === 'GET' && path === 'suppliers/match') {
+      const { user, supabase } = await getAuthContext(req);
+      if (!user) return json({ error: 'Unauthorized' }, 401);
+      const url = new URL(req.url);
+      const q = (url.searchParams.get('q') || '').trim();
+      if (!q) return json({ matches: [] });
+      const normalize = (s) => (s || '').toLowerCase()
+        .replace(/\b(warung|toko|pak|bu|next|the|cv|pt|ud|mrs?|mrs)\b/gi, '')
+        .replace(/[^a-z0-9]/g, '').trim();
+      const nq = normalize(q);
+      const { data: all } = await supabase.from('suppliers').select('id, name, whatsapp, is_active').eq('is_active', true);
+      const scored = (all || []).map(s => {
+        const ns = normalize(s.name);
+        // similarity: prefix match / substring / same normalized
+        let score = 0;
+        if (ns === nq) score = 100;
+        else if (ns.startsWith(nq) || nq.startsWith(ns)) score = 85;
+        else if (ns.includes(nq) || nq.includes(ns)) score = 70;
+        else {
+          // jaccard-ish on trigrams
+          const tri = (s) => { const t = new Set(); for (let i = 0; i < s.length - 2; i++) t.add(s.slice(i, i+3)); return t; };
+          const a = tri(ns), b = tri(nq);
+          const inter = [...a].filter(x => b.has(x)).length;
+          const uni = new Set([...a, ...b]).size || 1;
+          score = Math.round((inter / uni) * 100);
+        }
+        return { ...s, score };
+      }).filter(s => s.score >= 40).sort((a,b)=>b.score - a.score).slice(0, 5);
+      return json({ matches: scored });
+    }
+
+    // POST /api/quick-purchase — atomic PO+Receiving+Bill(+Payment)
+    // body: {
+    //   supplier_id (opsional) or supplier_name (auto-create),
+    //   items: [{ item_id, qty, unit_price? (optional), purchase_unit_id? }],
+    //   payment: { method, amount, reference? } | null,   // null jika belum bayar (Shopee prepaid harusnya diisi)
+    //   received: true|false,                              // apakah barang sudah datang
+    //   pricing_pending: true|false,                       // apakah harga belum diketahui
+    //   photo_path?, notes?, idempotency_key?
+    // }
+    if (method === 'POST' && path === 'quick-purchase') {
+      const { user, token } = await getAuthContext(req);
+      if (!user) return json({ error: 'Unauthorized' }, 401);
+      const body = await req.json();
+      const admin = getAdminSupabase();
+      const userClient = getUserSupabase(token);
+
+      if (body.idempotency_key) {
+        const { data: existing } = await admin.from('purchase_orders').select('*').eq('idempotency_key', body.idempotency_key).maybeSingle();
+        if (existing) {
+          const { data: fullExisting } = await admin.from('purchase_orders').select('*, supplier:suppliers(*), items:purchase_order_items(*)').eq('id', existing.id).maybeSingle();
+          return json({ order: fullExisting, idempotent: true });
+        }
+      }
+
+      const { data: me } = await userClient.from('employees').select('outlet_id').eq('auth_user_id', user.id).maybeSingle();
+      const outlet_id = body.outlet_id || me?.outlet_id;
+
+      // Resolve supplier
+      let supplier_id = body.supplier_id;
+      if (!supplier_id && body.supplier_name) {
+        const { data: sup, error: supErr } = await userClient.from('suppliers').insert({
+          outlet_id, name: body.supplier_name, is_active: true,
+        }).select().single();
+        if (supErr) {
+          // maybe duplicate — try find
+          const { data: found } = await admin.from('suppliers').select('id').eq('outlet_id', outlet_id).ilike('name', body.supplier_name).maybeSingle();
+          if (found) supplier_id = found.id;
+          else return json({ error: 'Gagal buat supplier: ' + supErr.message }, 400);
+        } else supplier_id = sup.id;
+      }
+      if (!supplier_id) return json({ error: 'supplier_id atau supplier_name wajib' }, 400);
+
+      // Generate PO number
+      const { count: poCount } = await admin.from('purchase_orders').select('*', { count: 'exact', head: true }).eq('outlet_id', outlet_id);
+      const po_number = 'QP-' + new Date().toISOString().slice(0,10).replace(/-/g,'') + '-' + String((poCount || 0) + 1).padStart(3, '0');
+
+      // Create PO
+      const { data: po, error: poErr } = await userClient.from('purchase_orders').insert({
+        outlet_id, supplier_id, po_number,
+        order_date: new Date().toISOString().slice(0,10),
+        status: 'ORDERED', is_quick_purchase: true,
+        notes: body.notes || null, created_by: user.id,
+        idempotency_key: body.idempotency_key || null,
+      }).select().single();
+      if (poErr) return json({ error: poErr.message }, 400);
+
+      // Insert PO items
+      const poiRows = [];
+      let totalAmount = 0;
+      for (const it of (body.items || [])) {
+        const { data: itemRow } = await admin.from('items').select('name, stock_unit_id').eq('id', it.item_id).maybeSingle();
+        if (!itemRow) continue;
+        const unitPrice = body.pricing_pending ? 0 : Number(it.unit_price || 0);
+        totalAmount += Number(it.qty) * unitPrice;
+        poiRows.push({
+          purchase_order_id: po.id,
+          item_id: it.item_id,
+          item_name_snapshot: itemRow.name,
+          ordered_qty: Number(it.qty),
+          purchase_unit_id: it.purchase_unit_id || itemRow.stock_unit_id,
+          stock_unit_id: itemRow.stock_unit_id,
+          conversion_ratio_snapshot: it.conversion_ratio_snapshot ?? 1,
+          unit_price: unitPrice,
+        });
+      }
+      const { data: pois, error: poiErr } = await userClient.from('purchase_order_items').insert(poiRows).select();
+      if (poiErr) return json({ error: poiErr.message }, 400);
+
+      let receiving = null;
+      if (body.received) {
+        // Create receiving
+        const { data: rec, error: recErr } = await userClient.from('receivings').insert({
+          outlet_id, purchase_order_id: po.id,
+          received_by: user.id, received_at: new Date().toISOString(),
+          status: 'POSTED', notes: body.notes || null,
+          photo_path: body.photo_path || null,
+        }).select().single();
+        if (recErr) return json({ error: recErr.message }, 400);
+        // receiving_items (trigger will create stock movements + update PO status)
+        const riRows = pois.map(poi => ({
+          receiving_id: rec.id,
+          purchase_order_item_id: poi.id,
+          item_id: poi.item_id,
+          ordered_qty_snapshot: poi.ordered_qty,
+          received_qty: poi.ordered_qty, // all received
+          purchase_unit_id: poi.purchase_unit_id,
+          stock_unit_id: poi.stock_unit_id,
+          conversion_ratio_snapshot: poi.conversion_ratio_snapshot,
+        }));
+        const { error: riErr } = await userClient.from('receiving_items').insert(riRows);
+        if (riErr) return json({ error: riErr.message }, 400);
+        receiving = rec;
+      }
+
+      // Create Bill (linked to receiving if any)
+      const { count: billCount } = await admin.from('bills').select('*', { count: 'exact', head: true }).eq('outlet_id', outlet_id);
+      const bill_number = 'BILL-' + new Date().toISOString().slice(0,10).replace(/-/g,'') + '-' + String((billCount || 0) + 1).padStart(3,'0');
+      const { data: bill, error: billErr } = await userClient.from('bills').insert({
+        outlet_id, supplier_id, bill_number,
+        bill_date: new Date().toISOString().slice(0,10),
+        total_amount: body.pricing_pending ? 0 : totalAmount,
+        pricing_status: body.pricing_pending ? 'PENDING' : 'PRICED',
+        notes: body.notes || null,
+        photo_path: body.photo_path || null,
+        created_by: user.id,
+      }).select().single();
+      if (billErr) return json({ error: billErr.message }, 400);
+      if (receiving) {
+        await userClient.from('bill_receivings').insert({ bill_id: bill.id, receiving_id: receiving.id });
+      }
+
+      // Create Payment if paid
+      let payment = null;
+      if (body.payment && Number(body.payment.amount) > 0 && !body.pricing_pending) {
+        const { data: pay, error: payErr } = await userClient.from('payments').insert({
+          outlet_id, bill_id: bill.id,
+          amount: Number(body.payment.amount),
+          payment_date: new Date().toISOString().slice(0,10),
+          method: body.payment.method || 'CASH',
+          reference: body.payment.reference || null,
+          proof_file: body.payment.proof_file || body.photo_path || null,
+          created_by: user.id,
+        }).select().single();
+        if (payErr) return json({ error: payErr.message }, 400);
+        payment = pay;
+      }
+
+      // Update item_suppliers price history if priced
+      if (!body.pricing_pending) {
+        for (const it of (body.items || [])) {
+          if (Number(it.unit_price) > 0) {
+            await admin.from('item_suppliers').update({ is_active: false, effective_to: new Date().toISOString() })
+              .eq('supplier_id', supplier_id).eq('item_id', it.item_id).eq('is_active', true);
+            await admin.from('item_suppliers').insert({
+              supplier_id, item_id: it.item_id, current_price: Number(it.unit_price),
+              price_unit_id: it.purchase_unit_id || null, is_active: true,
+            });
+          }
+        }
+      }
+
+      return json({ ok: true, po, receiving, bill, payment });
+    }
+
+    // PATCH /api/bills/:id/set-prices — update pricing for pending bill
+    // body: { items: [{ purchase_order_item_id, unit_price }], total_amount? }
+    if (method === 'PATCH' && path.match(/^bills\/[^/]+\/set-prices$/)) {
+      const { user, token } = await getAuthContext(req);
+      if (!user) return json({ error: 'Unauthorized' }, 401);
+      const id = path.split('/')[1];
+      const body = await req.json();
+      const admin = getAdminSupabase();
+      const userClient = getUserSupabase(token);
+
+      const { data: bill } = await admin.from('bills').select('*, receivings:bill_receivings(receiving:receivings(purchase_order_id))').eq('id', id).maybeSingle();
+      if (!bill) return json({ error: 'Bill tidak ditemukan' }, 404);
+
+      // Update PO items unit_price via admin (bypass RLS since owner-privileged)
+      let total = 0;
+      for (const it of (body.items || [])) {
+        const { data: updated } = await admin.from('purchase_order_items')
+          .update({ unit_price: Number(it.unit_price) })
+          .eq('id', it.purchase_order_item_id).select().single();
+        if (updated) total += Number(updated.ordered_qty) * Number(it.unit_price);
+        // Update supplier price history
+        if (Number(it.unit_price) > 0 && updated?.item_id) {
+          await admin.from('item_suppliers').update({ is_active: false, effective_to: new Date().toISOString() })
+            .eq('supplier_id', bill.supplier_id).eq('item_id', updated.item_id).eq('is_active', true);
+          await admin.from('item_suppliers').insert({
+            supplier_id: bill.supplier_id, item_id: updated.item_id,
+            current_price: Number(it.unit_price),
+            price_unit_id: updated.purchase_unit_id || null, is_active: true,
+          });
+        }
+      }
+      const finalTotal = body.total_amount !== undefined ? Number(body.total_amount) : total;
+      const { data: updBill, error } = await userClient.from('bills')
+        .update({ total_amount: finalTotal, pricing_status: 'PRICED' })
+        .eq('id', id).select().single();
+      if (error) return json({ error: error.message }, 403);
+      return json({ bill: updBill });
+    }
+
+    // Dashboard extra
+    if (method === 'GET' && path === 'dashboard/purchasing') {
+      const { user, supabase } = await getAuthContext(req);
+      if (!user) return json({ error: 'Unauthorized' }, 401);
+      const [pending_delivery, pending_price] = await Promise.all([
+        supabase.from('purchase_orders').select('id, po_number, order_date, supplier:suppliers(name), items:purchase_order_items(item_name_snapshot, ordered_qty, received_qty)').in('status', ['ORDERED','PARTIAL']),
+        supabase.from('bills').select('id, bill_number, bill_date, supplier:suppliers(name, whatsapp)').eq('pricing_status', 'PENDING'),
+      ]);
+      return json({
+        pending_delivery: pending_delivery.data || [],
+        pending_price: pending_price.data || [],
+      });
+    }
+
     return json({ error: 'Not found', path, method }, 404);
   } catch (e) {
     return json({ error: e.message || 'Server error' }, 500);
